@@ -1109,8 +1109,14 @@ const CouchNavigator = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  // Only auto-scroll when NEW messages arrive, not on every message update
   useEffect(() => {
-    scrollToBottom();
+    // Only scroll if message count increased (new message arrived)
+    if (messages.length > lastMessageCountRef.current) {
+      scrollToBottom();
+    }
+    // Update the count for next comparison
+    lastMessageCountRef.current = messages.length;
   }, [messages]);
 
   // Check user assignment and auto-route
@@ -1434,7 +1440,8 @@ const CouchNavigator = () => {
           });
         }
 
-        lastMessageCountRef.current = msgs.length;
+        // NOTE: lastMessageCountRef is now updated in the scroll useEffect (line 1119)
+        // to properly detect when to auto-scroll on new messages
       },
       (error) => {
         console.error('❌ Error listening to messages:', error);
