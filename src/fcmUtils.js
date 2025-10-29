@@ -219,7 +219,8 @@ export const savePendingFCMToken = async (userId) => {
     return;
   }
 
-  try {
+  // Function to attempt token retrieval
+  const attemptTokenRetrieval = async () => {
     console.log('🔍 Checking for FCM token in memory...');
     let tokenToSave = pendingToken;
     console.log('🔍 Token in memory:', tokenToSave ? tokenToSave.substring(0, 20) + '...' : 'null');
@@ -240,6 +241,31 @@ export const savePendingFCMToken = async (userId) => {
       console.log('🔍 FCMToken from UserDefaults:', tokenToSave ? tokenToSave.substring(0, 20) + '...' : 'null');
     }
 
+    return tokenToSave;
+  };
+
+  try {
+    // Try immediately first
+    let tokenToSave = await attemptTokenRetrieval();
+
+    // If no token found, retry with delays (iOS might not have registered yet)
+    if (!tokenToSave) {
+      console.log('⏳ No token found immediately, will retry with delays...');
+
+      const delays = [1000, 2000, 3000]; // Retry after 1s, 2s, 3s
+
+      for (const delay of delays) {
+        await new Promise(resolve => setTimeout(resolve, delay));
+        console.log(`🔄 Retrying token retrieval after ${delay}ms...`);
+        tokenToSave = await attemptTokenRetrieval();
+
+        if (tokenToSave) {
+          console.log('✅ Token found on retry!');
+          break;
+        }
+      }
+    }
+
     if (tokenToSave) {
       console.log('✅ Found FCM token, saving to Firestore for user:', userId);
 
@@ -256,7 +282,7 @@ export const savePendingFCMToken = async (userId) => {
       pendingToken = null;
       await Preferences.remove({ key: 'pendingFCMToken' });
     } else {
-      console.error('❌ No FCM token found in any location (memory, pendingFCMToken, or FCMToken)');
+      console.error('❌ No FCM token found after all retry attempts (memory, pendingFCMToken, or FCMToken)');
     }
   } catch (error) {
     console.error('❌ Error saving pending FCM token:', error);
