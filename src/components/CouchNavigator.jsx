@@ -223,6 +223,7 @@ const CouchNavigator = () => {
 
   // Map refresh trigger for tab visibility changes
   const [mapRefreshTrigger, setMapRefreshTrigger] = useState(0);
+  const [forceRefresh, setForceRefresh] = useState(0);
   const [lastSyncTime, setLastSyncTime] = useState(null);
   const [showQueueManager, setShowQueueManager] = useState(false);
 
@@ -349,6 +350,44 @@ const CouchNavigator = () => {
     Object.keys(historyPolylinesRef.current).forEach(rideId => {
       clearHistoryPolyline(rideId);
     });
+  };
+
+  // Force complete refresh of all map elements
+  const forceCompleteRefresh = () => {
+    console.log('🔄 FORCE COMPLETE REFRESH - Clearing and re-rendering all map elements');
+
+    if (!mapRef.current || !googleMapsLoaded || !window.google) {
+      console.log('❌ Cannot force refresh - map not ready');
+      return;
+    }
+
+    try {
+      // Trigger Google Maps resize
+      window.google.maps.event.trigger(mapRef.current, 'resize');
+
+      // Clear and reset route
+      if (directionsRendererRef.current) {
+        directionsRendererRef.current.setMap(null);
+        directionsRendererRef.current = null;
+      }
+      lastRenderedRouteRef.current = null;
+
+      // Clear all markers
+      Object.values(markersRef.current).forEach(marker => {
+        if (marker && marker.setMap) marker.setMap(null);
+      });
+      markersRef.current = {};
+
+      // Clear all history polylines
+      clearAllHistoryPolylines();
+
+      // Increment force refresh to trigger all useEffects
+      setForceRefresh(prev => prev + 1);
+
+      console.log('✅ Force refresh complete - all elements cleared');
+    } catch (error) {
+      console.error('❌ Error during force refresh:', error);
+    }
   };
 
   // Update or create history polyline for a ride
@@ -845,12 +884,12 @@ const CouchNavigator = () => {
 
             console.log('✅ Map refreshed after tab visibility change');
 
-            // Trigger re-render of markers, routes, and history trails
-            setMapRefreshTrigger(prev => prev + 1);
+            // Force complete refresh of all map elements
+            forceCompleteRefresh();
           } catch (error) {
             console.error('❌ Error refreshing map on visibility change:', error);
           }
-        }, 100);
+        }, 200);
       }
     };
 
@@ -863,12 +902,23 @@ const CouchNavigator = () => {
 
   // SEPARATE: Handle route rendering independently from markers
   useEffect(() => {
+    console.log('🛣️ Route rendering effect triggered:', {
+      hasMap: !!mapRef.current,
+      googleMapsLoaded,
+      activeRidesCount: activeRides.length,
+      selectedCar,
+      viewMode,
+      forceRefresh
+    });
+
     // Ensure map and Google Maps are ready
     if (!mapRef.current || !googleMapsLoaded || !window.google) {
+      console.log('⏭️ Route rendering skipped - map not ready');
       return;
     }
 
     if (activeRides.length === 0) {
+      console.log('⏭️ Route rendering skipped - no active rides');
       clearRoute();
       return;
     }
@@ -876,24 +926,32 @@ const CouchNavigator = () => {
     // In couch view, render routes for all active rides (or first one for simplicity)
     // In navigator view, only render if we have a selected car
     if (viewMode === 'navigator' && !selectedCar) {
+      console.log('⏭️ Route rendering skipped - navigator view without selected car');
       clearRoute();
       return;
     }
 
     const ride = activeRides[0];
-    if (!ride.pickup || !ride.dropoffs) return;
+    if (!ride.pickup || !ride.dropoffs) {
+      console.log('⏭️ Route rendering skipped - ride missing pickup or dropoffs');
+      return;
+    }
 
     const routeKey = `${ride.pickup}-${ride.dropoffs.join('-')}-${ride.id}`;
     const isNewRoute = lastRenderedRouteRef.current !== routeKey;
     const routeExists = directionsRendererRef.current && directionsRendererRef.current.getMap();
+
+    console.log('🛣️ Route check:', { routeKey, isNewRoute, routeExists, lastRoute: lastRenderedRouteRef.current });
 
     // Re-render if: new route OR route doesn't exist on map (e.g., after tab switch)
     if (isNewRoute || !routeExists) {
       routeLogger.log('🛣️ Rendering route for ride:', ride.id, isNewRoute ? '(new)' : '(refresh)');
       renderRoute(ride.pickup, ride.dropoffs, true);
       lastRenderedRouteRef.current = routeKey;
+    } else {
+      console.log('⏭️ Route already rendered, skipping');
     }
-  }, [activeRides, selectedCar, viewMode, googleMapsLoaded, mapRefreshTrigger]);
+  }, [activeRides, selectedCar, viewMode, googleMapsLoaded, mapRefreshTrigger, forceRefresh]);
 
   // MODIFIED: Update markers smoothly without recreating
   useEffect(() => {
@@ -1106,7 +1164,39 @@ const CouchNavigator = () => {
     }
 
     markersLogger.log('✅ Total markers now:', Object.keys(markersRef.current).length);
-  }, [carLocations, googleMapsLoaded, googleMapsMarkerReady, selectedCar, viewMode, mapRefreshTrigger]);
+  }, [carLocations, googleMapsLoaded, googleMapsMarkerReady, selectedCar, viewMode, mapRefreshTrigger, forceRefresh]);
+
+  // Force refresh on component mount (navigating to CouchNavigator)
+  useEffect(() => {
+    console.log('🎬 CouchNavigator mounted/remounted');
+    if (googleMapsLoaded && mapRef.current) {
+      console.log('🔄 Map ready on mount, forcing initial refresh');
+      setTimeout(() => {
+        forceCompleteRefresh();
+      }, 300);
+    }
+  }, []); // Empty deps = run only on mount
+
+  // Force refresh when selectedCar changes (switching between cars)
+  useEffect(() => {
+    if (googleMapsLoaded && mapRef.current) {
+      console.log('🚗 Selected car changed, forcing complete refresh');
+      // Small delay to ensure state has propagated
+      setTimeout(() => {
+        forceCompleteRefresh();
+      }, 100);
+    }
+  }, [selectedCar]);
+
+  // Force refresh when viewMode changes
+  useEffect(() => {
+    if (googleMapsLoaded && mapRef.current) {
+      console.log('👁️ View mode changed, forcing complete refresh');
+      setTimeout(() => {
+        forceCompleteRefresh();
+      }, 100);
+    }
+  }, [viewMode]);
 
   // Save state to localStorage when it changes
   useEffect(() => {
@@ -1378,7 +1468,7 @@ const CouchNavigator = () => {
         console.log(`⏭️ Skipping ride ${ride.id} - no car assigned yet`);
       }
     });
-  }, [carLocations, activeRides, mapRefreshTrigger]);
+  }, [carLocations, activeRides, mapRefreshTrigger, forceRefresh]);
 
   // Clear history when rides complete
   useEffect(() => {
