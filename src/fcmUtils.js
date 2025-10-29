@@ -233,12 +233,20 @@ export const savePendingFCMToken = async (userId) => {
       console.log('🔍 pendingFCMToken:', tokenToSave ? tokenToSave.substring(0, 20) + '...' : 'null');
     }
 
-    // Also check iOS UserDefaults (set by AppDelegate)
+    // Check iOS UserDefaults (set by AppDelegate) - try multiple key formats
     if (!tokenToSave && Capacitor.getPlatform() === 'ios') {
       console.log('🔍 Checking FCMToken in iOS UserDefaults...');
       const { value } = await Preferences.get({ key: 'FCMToken' });
       tokenToSave = value;
       console.log('🔍 FCMToken from UserDefaults:', tokenToSave ? tokenToSave.substring(0, 20) + '...' : 'null');
+
+      // Also try the CapacitorStorage prefixed key
+      if (!tokenToSave) {
+        console.log('🔍 Trying CapacitorStorage.FCMToken key...');
+        const { value: capValue } = await Preferences.get({ key: 'CapacitorStorage.FCMToken' });
+        tokenToSave = capValue;
+        console.log('🔍 CapacitorStorage.FCMToken:', tokenToSave ? tokenToSave.substring(0, 20) + '...' : 'null');
+      }
     }
 
     return tokenToSave;

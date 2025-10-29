@@ -135,11 +135,25 @@ extension AppDelegate: MessagingDelegate {
     func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
         print("Firebase registration token: \(String(describing: fcmToken))")
 
-        // Save FCM token to UserDefaults so JavaScript can access it via Capacitor Preferences
+        // Save FCM token to BOTH UserDefaults locations
         if let token = fcmToken {
+            // Save to standard UserDefaults
             UserDefaults.standard.set(token, forKey: "FCMToken")
             UserDefaults.standard.synchronize()
-            print("✅ FCM token saved to UserDefaults")
+
+            // ALSO save to CapacitorPreferences suite (what Capacitor Preferences plugin uses)
+            if let capDefaults = UserDefaults(suiteName: "CapacitorStorage") {
+                capDefaults.set(token, forKey: "FCMToken")
+                capDefaults.synchronize()
+                print("✅ FCM token saved to Capacitor storage")
+            }
+
+            // ALSO try the default Capacitor preferences key format
+            let capKey = "CapacitorStorage.FCMToken"
+            UserDefaults.standard.set(token, forKey: capKey)
+            UserDefaults.standard.synchronize()
+
+            print("✅ FCM token saved to all UserDefaults locations")
         }
 
         // Also post to NotificationCenter for any native listeners
