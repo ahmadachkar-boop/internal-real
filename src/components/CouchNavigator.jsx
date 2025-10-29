@@ -1529,7 +1529,8 @@ const CouchNavigator = () => {
             pickup: doc.data().pickup,
             dropoffs: doc.data().dropoffs || [doc.data().dropoff],
             riders: doc.data().riders,
-            status: doc.data().status
+            status: doc.data().status,
+            carNumber: doc.data().carNumber  // ADDED: Include carNumber for history tracking
           }));
           setActiveRides(rides);
         }
