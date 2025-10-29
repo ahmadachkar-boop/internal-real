@@ -1,0 +1,227 @@
+import { Capacitor } from '@capacitor/core';
+import { LocalNotifications } from '@capacitor/local-notifications';
+
+export const isNativeApp = Capacitor.isNativePlatform();
+
+// Check current notification permission status
+export const checkNotificationPermission = async () => {
+  if (isNativeApp) {
+    try {
+      const result = await LocalNotifications.checkPermissions();
+      console.log('📱 Current notification permission:', result.display);
+      return result.display === 'granted';
+    } catch (error) {
+      console.error('Error checking notification permission:', error);
+      return false;
+    }
+  } else {
+    if (!('Notification' in window)) {
+      return false;
+    }
+    return Notification.permission === 'granted';
+  }
+};
+
+// Request notification permissions
+export const requestNotificationPermission = async () => {
+  if (isNativeApp) {
+    try {
+      // First check current status
+      const currentStatus = await LocalNotifications.checkPermissions();
+      console.log('📱 Current status:', currentStatus.display);
+      
+      if (currentStatus.display === 'granted') {
+        return true;
+      }
+      
+      if (currentStatus.display === 'denied') {
+        console.log('📱 Permission previously denied');
+        return false;
+      }
+      
+      // Request permission
+      const result = await LocalNotifications.requestPermissions();
+      console.log('📱 Permission result:', result.display);
+      return result.display === 'granted';
+    } catch (error) {
+      console.error('Native notification permission error:', error);
+      return false;
+    }
+  } else {
+    if (!('Notification' in window)) {
+      return false;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      return permission === 'granted';
+    } catch (error) {
+      console.error('Web notification permission error:', error);
+      return false;
+    }
+  }
+};
+
+// Consistent notification ID for replacing previous notifications
+// Using a fixed ID ensures new notifications replace old ones instead of stacking
+const NOTIFICATION_ID = 1001;
+
+// Show notification
+export const showNotification = async (title, body) => {
+  if (isNativeApp) {
+    try {
+      // Cancel any existing notification first to prevent duplicates
+      try {
+        await LocalNotifications.cancel({ notifications: [{ id: NOTIFICATION_ID }] });
+      } catch (cancelError) {
+        // Ignore cancel errors - notification might not exist
+        console.log('No previous notification to cancel');
+      }
+
+      // For immediate notifications on iOS/Android, use schedule slightly in the future
+      // Using a CONSISTENT ID ensures this replaces any previous notification
+      // Schedule 100ms in the future to avoid "Scheduled time must be *after* current time" error
+      const scheduleTime = new Date(Date.now() + 100);
+
+      await LocalNotifications.schedule({
+        notifications: [{
+          title,
+          body,
+          id: NOTIFICATION_ID, // ✅ Fixed ID - replaces previous notification
+          schedule: { at: scheduleTime }, // Schedule 100ms in future
+          sound: 'default',
+          smallIcon: 'ic_stat_icon_config_sample',
+          iconColor: '#79F200',
+          // iOS-specific options
+          attachments: [],
+          actionTypeId: '',
+          extra: null
+        }]
+      });
+
+      console.log('✅ Native notification scheduled with ID:', NOTIFICATION_ID);
+    } catch (error) {
+      console.error('❌ Error showing native notification:', error);
+
+      // Fallback: try with longer delay
+      try {
+        const fallbackTime = new Date(Date.now() + 500); // 500ms delay
+        await LocalNotifications.schedule({
+          notifications: [{
+            title,
+            body,
+            id: NOTIFICATION_ID,
+            schedule: { at: fallbackTime }
+          }]
+        });
+        console.log('✅ Fallback notification scheduled');
+      } catch (fallbackError) {
+        console.error('❌ Fallback notification also failed:', fallbackError);
+      }
+    }
+  } else {
+    // Web notifications
+    if ('Notification' in window && Notification.permission === 'granted') {
+      try {
+        const notification = new Notification(title, {
+          body,
+          icon: '/logo192.png',
+          badge: '/logo192.png',
+          tag: 'carpool-notification', // Prevents duplicate notifications
+          renotify: true, // Allow notification to replace itself even with same tag
+          requireInteraction: false,
+          silent: false
+        });
+
+        // Auto-close after 5 seconds
+        setTimeout(() => {
+          notification.close();
+        }, 5000);
+
+        console.log('✅ Web notification shown');
+      } catch (error) {
+        console.error('❌ Error showing web notification:', error);
+      }
+    } else {
+      console.warn('⚠️ Web notifications not available or not permitted');
+    }
+  }
+};
+
+// Initialize audio context (must be called from user interaction on iOS)
+let audioContext = null;
+let isAudioInitialized = false;
+
+export const initializeAudioContext = () => {
+  if (isAudioInitialized) {
+    console.log('🔊 Audio already initialized');
+    return true;
+  }
+
+  // Skip audio initialization for native apps (they use native notifications)
+  if (isNativeApp) {
+    console.log('🔊 Skipping web audio for native app');
+    return false;
+  }
+
+  try {
+    // iOS requires AudioContext to be created from user gesture
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    isAudioInitialized = true;
+    console.log('✅ Audio context initialized from user gesture');
+
+    // Resume if suspended (common on iOS)
+    if (audioContext.state === 'suspended') {
+      audioContext.resume().then(() => {
+        console.log('✅ Audio context resumed');
+      });
+    }
+
+    return true;
+  } catch (error) {
+    console.error('❌ Audio initialization error:', error);
+    return false;
+  }
+};
+
+// Play notification sound
+export const playNotificationSound = async () => {
+  // Native apps use system notification sounds
+  if (isNativeApp) {
+    return;
+  }
+
+  // Check if audio is initialized
+  if (!audioContext) {
+    console.warn('⚠️ Audio not initialized. Call initializeAudioContext() from a user gesture first.');
+    return;
+  }
+
+  try {
+    // Resume audio context if suspended (iOS requirement)
+    if (audioContext.state === 'suspended') {
+      await audioContext.resume();
+    }
+
+    // Create a simple notification beep
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    // Two-tone notification sound
+    oscillator.frequency.value = 800; // Hz
+    oscillator.type = 'sine';
+
+    // Fade out envelope
+    gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+
+    oscillator.start(audioContext.currentTime);
+    oscillator.stop(audioContext.currentTime + 0.5);
+
+    console.log('🔔 Notification sound played');
+  } catch (error) {
+    console.error('❌ Error playing notification sound:', error);
+  }
+};
