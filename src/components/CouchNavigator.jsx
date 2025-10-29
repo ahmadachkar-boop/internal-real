@@ -337,18 +337,36 @@ const CouchNavigator = () => {
   };
 
   // Clear history polyline for a specific ride
-  const clearHistoryPolyline = (rideId) => {
+  const clearHistoryPolyline = async (rideId, deleteFromFirestore = false) => {
     if (historyPolylinesRef.current[rideId]) {
       historyPolylinesRef.current[rideId].setMap(null);
       delete historyPolylinesRef.current[rideId];
+    }
+
+    // Only delete from memory and Firestore if ride is truly completed
+    if (deleteFromFirestore) {
       delete carLocationHistoryRef.current[rideId];
+
+      // Delete from Firestore
+      try {
+        const rideRef = doc(db, 'rides', rideId);
+        await updateDoc(rideRef, {
+          locationHistory: []
+        });
+        console.log(`🗑️ Deleted history from Firestore for completed ride ${rideId}`);
+      } catch (error) {
+        console.error(`❌ Error deleting history from Firestore for ride ${rideId}:`, error);
+      }
     }
   };
 
-  // Clear all history polylines
+  // Clear all history polylines (visual only, keeps memory)
   const clearAllHistoryPolylines = () => {
     Object.keys(historyPolylinesRef.current).forEach(rideId => {
-      clearHistoryPolyline(rideId);
+      if (historyPolylinesRef.current[rideId]) {
+        historyPolylinesRef.current[rideId].setMap(null);
+        delete historyPolylinesRef.current[rideId];
+      }
     });
   };
 
@@ -390,8 +408,89 @@ const CouchNavigator = () => {
     }
   };
 
+  // Save history to Firestore
+  const saveHistoryToFirestore = async (rideId, history) => {
+    try {
+      const rideRef = doc(db, 'rides', rideId);
+      await updateDoc(rideRef, {
+        locationHistory: history.map(point => ({
+          lat: point.lat,
+          lng: point.lng,
+          timestamp: Timestamp.now()
+        }))
+      });
+      console.log(`💾 Saved history to Firestore for ride ${rideId} (${history.length} points)`);
+    } catch (error) {
+      console.error(`❌ Error saving history to Firestore for ride ${rideId}:`, error);
+    }
+  };
+
+  // Load history from Firestore
+  const loadHistoryFromFirestore = async (rideId) => {
+    try {
+      const rideRef = doc(db, 'rides', rideId);
+      const rideDoc = await getDoc(rideRef);
+
+      if (rideDoc.exists() && rideDoc.data().locationHistory) {
+        const history = rideDoc.data().locationHistory.map(point => ({
+          lat: point.lat,
+          lng: point.lng
+        }));
+        console.log(`📥 Loaded history from Firestore for ride ${rideId} (${history.length} points)`);
+        return history;
+      }
+
+      return [];
+    } catch (error) {
+      console.error(`❌ Error loading history from Firestore for ride ${rideId}:`, error);
+      return [];
+    }
+  };
+
+  // Restore history polyline from loaded data
+  const restoreHistoryPolyline = (rideId, history) => {
+    if (!mapRef.current || !googleMapsLoaded || !window.google) {
+      console.log(`⏭️ Cannot restore history for ride ${rideId} - map not ready`);
+      return;
+    }
+
+    if (!history || history.length === 0) {
+      console.log(`⏭️ No history to restore for ride ${rideId}`);
+      return;
+    }
+
+    // Store history in ref
+    carLocationHistoryRef.current[rideId] = history;
+    console.log(`📝 Restored history array for ride ${rideId} (${history.length} points)`);
+
+    // Create polyline if we have at least 2 points
+    if (history.length > 1) {
+      const polyline = new window.google.maps.Polyline({
+        path: history,
+        geodesic: true,
+        strokeColor: '#EF4444', // Red color
+        strokeOpacity: 0.6,
+        strokeWeight: 3,
+        icons: [{
+          icon: {
+            path: 'M 0,-1 0,1',
+            strokeOpacity: 1,
+            scale: 2
+          },
+          offset: '0',
+          repeat: '10px'
+        }],
+        zIndex: 50, // Below route (100) and markers (1000)
+        map: mapRef.current
+      });
+
+      historyPolylinesRef.current[rideId] = polyline;
+      console.log(`🔴 Restored history trail for ride ${rideId} (${history.length} points)`);
+    }
+  };
+
   // Update or create history polyline for a ride
-  const updateHistoryPolyline = (rideId, carNumber, newLocation) => {
+  const updateHistoryPolyline = async (rideId, carNumber, newLocation) => {
     if (!mapRef.current || !googleMapsLoaded || !window.google) {
       console.log(`⏭️ Cannot update history for ride ${rideId} - map not ready`);
       return;
@@ -416,6 +515,11 @@ const CouchNavigator = () => {
       if (history.length > 100) {
         history.shift();
       }
+
+      // Save to Firestore (async, don't wait)
+      saveHistoryToFirestore(rideId, history).catch(err => {
+        console.error('Error saving history:', err);
+      });
 
       // Update or create polyline
       if (historyPolylinesRef.current[rideId]) {
@@ -1441,6 +1545,35 @@ const CouchNavigator = () => {
     return () => unsubscribe();
   }, [activeNDR, viewMode, selectedCar]);
 
+  // Load history from Firestore on mount or when rides change
+  useEffect(() => {
+    if (!mapRef.current || !googleMapsLoaded || !window.google) {
+      console.log('⏭️ Cannot load history - map not ready');
+      return;
+    }
+
+    if (!activeRides.length) {
+      console.log('⏭️ No active rides to load history for');
+      return;
+    }
+
+    console.log('📥 Loading history from Firestore for active rides');
+
+    // Load history for each active ride
+    activeRides.forEach(async (ride) => {
+      // Only load if we don't already have history in memory for this ride
+      if (!carLocationHistoryRef.current[ride.id] || carLocationHistoryRef.current[ride.id].length === 0) {
+        console.log(`📥 Loading history for ride ${ride.id}`);
+        const history = await loadHistoryFromFirestore(ride.id);
+        if (history.length > 0) {
+          restoreHistoryPolyline(ride.id, history);
+        }
+      } else {
+        console.log(`⏭️ History already in memory for ride ${ride.id} (${carLocationHistoryRef.current[ride.id].length} points)`);
+      }
+    });
+  }, [activeRides, googleMapsLoaded, forceRefresh]);
+
   // Track car location history for active rides
   useEffect(() => {
     if (!activeRides.length || !Object.keys(carLocations).length) return;
@@ -1473,15 +1606,18 @@ const CouchNavigator = () => {
   // Clear history when rides complete
   useEffect(() => {
     if (!activeRides.length) {
-      // No active rides, clear all history
-      clearAllHistoryPolylines();
+      // No active rides, clear all history polylines and memory
+      Object.keys(carLocationHistoryRef.current).forEach(rideId => {
+        console.log(`🧹 Clearing history for completed ride ${rideId} (no active rides)`);
+        clearHistoryPolyline(rideId, true); // Delete from Firestore
+      });
     } else {
       // Check if any tracked rides are no longer active
       const activeRideIds = activeRides.map(r => r.id);
-      Object.keys(historyPolylinesRef.current).forEach(rideId => {
+      Object.keys(carLocationHistoryRef.current).forEach(rideId => {
         if (!activeRideIds.includes(rideId)) {
           console.log(`🧹 Clearing history for completed ride ${rideId}`);
-          clearHistoryPolyline(rideId);
+          clearHistoryPolyline(rideId, true); // Delete from Firestore
         }
       });
     }
