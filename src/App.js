@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Route, Routes, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './AuthContext';
 import { ActiveNDRProvider } from './ActiveNDRContext';
@@ -20,6 +20,7 @@ import MemberProfile from './components/MemberProfile';
 import AdminPanel from './components/AdminPanel';
 import CouchNavigator from './components/CouchNavigator';
 import ErrorBoundary from './components/ErrorBoundary';
+import { registerPushNotificationListeners } from './fcmUtils';
 
 // Protected Route wrapper
 const ProtectedRoute = ({ children, adminOnly = false }) => {
@@ -216,6 +217,12 @@ function AppContent() {
 }
 
 function App() {
+  // Register push notification listeners EARLY on app startup
+  // This ensures we catch FCM tokens before user logs in
+  useEffect(() => {
+    registerPushNotificationListeners();
+  }, []);
+
   return (
     <AuthProvider>
       <AppContent />
