@@ -1498,30 +1498,31 @@ const NotesTabEditable = ({ notes, setNotes, ndrId, assignments, members, ndr })
  // Generate formatted report as JSX
   const generateFormattedReport = () => {
     const getMemberById = (id) => members.find(m => m.id === id);
-    
+
     const sortedCars = Object.entries(assignments.cars || {})
       .sort(([a], [b]) => parseInt(a) - parseInt(b));
-    
+
     return (
       <div className="space-y-4">
         {/* Leadership */}
-        <div>
-          <p><strong>DON:</strong> {notes.leadership.don || 'Not assigned'}</p>
-          <p><strong>DOC:</strong> {notes.leadership.doc || 'Not assigned'}</p>
-          <p><strong>DUC:</strong> {notes.leadership.duc || 'Not assigned'}</p>
+        <div className="section">
+          <div className="section-title">Leadership Team</div>
+          <div className="content-row"><strong>Director of the Night (DON):</strong> {notes.leadership.don || 'Not assigned'}</div>
+          <div className="content-row"><strong>Director of Couch (DOC):</strong> {notes.leadership.doc || 'Not assigned'}</div>
+          <div className="content-row"><strong>Director of Utility Closet (DUC):</strong> {notes.leadership.duc || 'Not assigned'}</div>
         </div>
 
         {/* Car Assignments */}
-        <div>
-          <p className="font-bold">CAR ASSIGNMENTS:</p>
+        <div className="section">
+          <div className="section-title">Car Assignments</div>
           {sortedCars.length === 0 ? (
-            <p className="ml-4">No cars assigned yet</p>
+            <div className="content-row">No cars assigned yet</div>
           ) : (
-            <div className="ml-4">
+            <div>
               {sortedCars.map(([carNum, memberIds]) => {
                 if (memberIds && memberIds.length > 0) {
                   const memberNames = memberIds.map(id => getMemberById(id)?.name || 'Unknown').join(', ');
-                  return <p key={carNum}>Car {carNum}: {memberNames}</p>;
+                  return <div key={carNum} className="content-row"><strong>Car {carNum}:</strong> {memberNames}</div>;
                 }
                 return null;
               })}
@@ -1530,29 +1531,47 @@ const NotesTabEditable = ({ notes, setNotes, ndrId, assignments, members, ndr })
         </div>
 
         {/* Progress Updates */}
-        <div>
-          <p className="font-bold">PROGRESS UPDATES:</p>
+        <div className="section">
+          <div className="section-title">Progress Updates</div>
           {notes.updates && notes.updates.length > 0 ? (
-            <div className="ml-4">
+            <div>
               {notes.updates.map(update => (
-                <p key={update.id}>[{update.time}] {update.text}</p>
+                <div key={update.id} className="content-row"><strong>[{update.time}]</strong> {update.text}</div>
               ))}
             </div>
           ) : (
-            <p className="ml-4">No updates yet</p>
+            <div className="content-row">No updates yet</div>
           )}
         </div>
 
         {/* Ride Statistics */}
-        <div>
-          <p className="font-bold">RIDE STATISTICS:</p>
-          <div className="ml-4">
-            <p>Completed Rides: {rideStats.completedRides}</p>
-            <p>Cancelled Rides: {rideStats.cancelledRides}</p>
-            <p>Terminated Rides: {rideStats.terminatedRides}</p>
-            <p className="mt-2">Completed Riders: {rideStats.completedRiders}</p>
-            <p>Cancelled Riders: {rideStats.cancelledRiders}</p>
-            <p>Terminated Riders: {rideStats.terminatedRiders}</p>
+        <div className="section">
+          <div className="section-title">Ride Statistics</div>
+          <div className="stats-grid">
+            <div className="stat-item">
+              <div style={{fontSize: '14px', color: '#6b7280', marginBottom: '4px'}}>Completed Rides</div>
+              <div style={{fontSize: '24px', fontWeight: '700', color: '#059669'}}>{rideStats.completedRides}</div>
+            </div>
+            <div className="stat-item">
+              <div style={{fontSize: '14px', color: '#6b7280', marginBottom: '4px'}}>Cancelled Rides</div>
+              <div style={{fontSize: '24px', fontWeight: '700', color: '#dc2626'}}>{rideStats.cancelledRides}</div>
+            </div>
+            <div className="stat-item">
+              <div style={{fontSize: '14px', color: '#6b7280', marginBottom: '4px'}}>Terminated Rides</div>
+              <div style={{fontSize: '24px', fontWeight: '700', color: '#ea580c'}}>{rideStats.terminatedRides}</div>
+            </div>
+            <div className="stat-item">
+              <div style={{fontSize: '14px', color: '#6b7280', marginBottom: '4px'}}>Completed Riders</div>
+              <div style={{fontSize: '24px', fontWeight: '700', color: '#059669'}}>{rideStats.completedRiders}</div>
+            </div>
+            <div className="stat-item">
+              <div style={{fontSize: '14px', color: '#6b7280', marginBottom: '4px'}}>Cancelled Riders</div>
+              <div style={{fontSize: '24px', fontWeight: '700', color: '#dc2626'}}>{rideStats.cancelledRiders}</div>
+            </div>
+            <div className="stat-item">
+              <div style={{fontSize: '14px', color: '#6b7280', marginBottom: '4px'}}>Terminated Riders</div>
+              <div style={{fontSize: '24px', fontWeight: '700', color: '#ea580c'}}>{rideStats.terminatedRiders}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -1562,66 +1581,227 @@ const NotesTabEditable = ({ notes, setNotes, ndrId, assignments, members, ndr })
   const downloadReportAsPDF = () => {
     const printContent = document.getElementById('formatted-report');
     if (!printContent) return;
-    
+
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
       alert('Please allow popups to download the PDF');
       return;
     }
-    
+
+    // Get the current app URL for chat log links
+    const appUrl = window.location.origin;
+
     printWindow.document.write(`
       <!DOCTYPE html>
       <html>
         <head>
           <title>NDR Night Report - ${ndr.eventName}</title>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <style>
+            /* Reset and base styles */
+            * {
+              margin: 0;
+              padding: 0;
+              box-sizing: border-box;
+            }
+
             body {
-              font-family: Arial, sans-serif;
-              padding: 20px;
-              max-width: 800px;
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Helvetica Neue', Arial, sans-serif;
+              line-height: 1.6;
+              color: #1a1a1a;
+              background: #ffffff;
+              padding: 40px;
+              max-width: 900px;
               margin: 0 auto;
             }
-            h1 {
+
+            /* Header styles */
+            .report-header {
               text-align: center;
-              margin-bottom: 20px;
+              border-bottom: 3px solid #2563eb;
+              padding-bottom: 24px;
+              margin-bottom: 32px;
             }
+
+            h1 {
+              font-size: 32px;
+              font-weight: 700;
+              color: #1e40af;
+              margin-bottom: 8px;
+              letter-spacing: -0.5px;
+            }
+
             h2 {
-              margin-bottom: 10px;
+              font-size: 24px;
+              font-weight: 600;
+              color: #374151;
+              margin-bottom: 8px;
             }
+
             .date {
-              margin-bottom: 20px;
-              color: #666;
+              font-size: 16px;
+              color: #6b7280;
+              font-weight: 500;
             }
+
+            /* Section styles */
             .section {
+              margin-bottom: 28px;
+              padding: 20px;
+              background: #f9fafb;
+              border-radius: 8px;
+              border: 1px solid #e5e7eb;
+            }
+
+            .section-title {
+              font-size: 18px;
+              font-weight: 700;
+              color: #1e40af;
+              margin-bottom: 12px;
+              text-transform: uppercase;
+              letter-spacing: 0.5px;
+              border-bottom: 2px solid #dbeafe;
+              padding-bottom: 8px;
+            }
+
+            /* Content styles */
+            .content-row {
+              margin-bottom: 8px;
+              padding-left: 16px;
+            }
+
+            .content-row strong,
+            .font-bold {
+              font-weight: 600;
+              color: #374151;
+            }
+
+            .ml-4 {
+              margin-left: 24px;
+            }
+
+            .mt-2 {
+              margin-top: 12px;
+            }
+
+            /* Chat logs section */
+            .chat-logs {
+              margin-top: 32px;
+              padding: 20px;
+              background: #eff6ff;
+              border: 2px solid #2563eb;
+              border-radius: 8px;
+            }
+
+            .chat-logs-title {
+              font-size: 18px;
+              font-weight: 700;
+              color: #1e40af;
               margin-bottom: 16px;
             }
-            strong {
-              font-weight: bold;
+
+            .chat-link {
+              display: inline-block;
+              padding: 10px 16px;
+              margin: 8px 8px 8px 0;
+              background: #2563eb;
+              color: white;
+              text-decoration: none;
+              border-radius: 6px;
+              font-weight: 600;
+              font-size: 14px;
+              transition: background 0.2s;
             }
-            .font-bold {
-              font-weight: bold;
+
+            .chat-link:hover {
+              background: #1d4ed8;
             }
-            .ml-4 {
-              margin-left: 16px;
+
+            /* Statistics grid */
+            .stats-grid {
+              display: grid;
+              grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+              gap: 12px;
+              margin-top: 12px;
             }
-            .mt-2 {
-              margin-top: 8px;
+
+            .stat-item {
+              padding: 12px;
+              background: white;
+              border-radius: 6px;
+              border: 1px solid #e5e7eb;
             }
+
+            /* Print styles */
             @media print {
               @page {
-                margin: 1in;
+                margin: 0.75in;
+                size: letter;
+              }
+
+              body {
+                padding: 0;
+                background: white;
+              }
+
+              .chat-link {
+                color: #2563eb;
+                background: transparent;
+                border: 2px solid #2563eb;
+              }
+
+              .section {
+                page-break-inside: avoid;
+              }
+            }
+
+            /* Responsive adjustments */
+            @media (max-width: 768px) {
+              body {
+                padding: 20px;
+              }
+
+              h1 {
+                font-size: 24px;
+              }
+
+              h2 {
+                font-size: 20px;
+              }
+
+              .stats-grid {
+                grid-template-columns: 1fr;
               }
             }
           </style>
         </head>
         <body>
-          <h1>NDR Night Report</h1>
-          <h2>${ndr.eventName}</h2>
-          <p class="date">${new Date(ndr.eventDate).toLocaleDateString()}</p>
+          <div class="report-header">
+            <h1>NDR Night Report</h1>
+            <h2>${ndr.eventName}</h2>
+            <p class="date">${new Date(ndr.eventDate).toLocaleDateString('en-US', {
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric'
+            })}</p>
+          </div>
+
           ${printContent.innerHTML}
+
+          <div class="chat-logs">
+            <div class="chat-logs-title">Communication Logs</div>
+            <p style="margin-bottom: 12px; color: #374151;">View complete chat history from the event:</p>
+            <a href="${appUrl}/couch-navigator" class="chat-link" target="_blank">📱 View Couch & Navigator Chat Logs</a>
+            <p style="margin-top: 16px; font-size: 13px; color: #6b7280; font-style: italic;">
+              Note: Chat logs contain all communication between the couch (command center) and navigators (field operators) during the event.
+            </p>
+          </div>
+
           <script>
             window.onload = function() {
-              window.print();
+              setTimeout(() => window.print(), 250);
             }
           </script>
         </body>
@@ -2107,30 +2287,31 @@ const NotesTabViewOnly = ({ ndr, members }) => {
  // Generate formatted report for view-only
   const generateFormattedReport = () => {
     const getMemberById = (id) => members.find(m => m.id === id);
-    
+
     const sortedCars = Object.entries(assignments.cars || {})
       .sort(([a], [b]) => parseInt(a) - parseInt(b));
 
     return (
       <div className="space-y-4">
         {/* Leadership */}
-        <div>
-          <p><strong>DON:</strong> {notes.leadership?.don || 'Not assigned'}</p>
-          <p><strong>DOC:</strong> {notes.leadership?.doc || 'Not assigned'}</p>
-          <p><strong>DUC:</strong> {notes.leadership?.duc || 'Not assigned'}</p>
+        <div className="section">
+          <div className="section-title">Leadership Team</div>
+          <div className="content-row"><strong>Director of the Night (DON):</strong> {notes.leadership?.don || 'Not assigned'}</div>
+          <div className="content-row"><strong>Director of Couch (DOC):</strong> {notes.leadership?.doc || 'Not assigned'}</div>
+          <div className="content-row"><strong>Director of Utility Closet (DUC):</strong> {notes.leadership?.duc || 'Not assigned'}</div>
         </div>
 
         {/* Car Assignments */}
-        <div>
-          <p className="font-bold">CAR ASSIGNMENTS:</p>
+        <div className="section">
+          <div className="section-title">Car Assignments</div>
           {sortedCars.length === 0 ? (
-            <p className="ml-4">No cars assigned</p>
+            <div className="content-row">No cars assigned</div>
           ) : (
-            <div className="ml-4">
+            <div>
               {sortedCars.map(([carNum, memberIds]) => {
                 if (memberIds && memberIds.length > 0) {
                   const memberNames = memberIds.map(id => getMemberById(id)?.name || 'Unknown').join(', ');
-                  return <p key={carNum}>Car {carNum}: {memberNames}</p>;
+                  return <div key={carNum} className="content-row"><strong>Car {carNum}:</strong> {memberNames}</div>;
                 }
                 return null;
               })}
@@ -2139,29 +2320,47 @@ const NotesTabViewOnly = ({ ndr, members }) => {
         </div>
 
         {/* Progress Updates */}
-        <div>
-          <p className="font-bold">PROGRESS UPDATES:</p>
+        <div className="section">
+          <div className="section-title">Progress Updates</div>
           {notes.updates && notes.updates.length > 0 ? (
-            <div className="ml-4">
+            <div>
               {notes.updates.map(update => (
-                <p key={update.id}>[{update.time}] {update.text}</p>
+                <div key={update.id} className="content-row"><strong>[{update.time}]</strong> {update.text}</div>
               ))}
             </div>
           ) : (
-            <p className="ml-4">No updates recorded</p>
+            <div className="content-row">No updates recorded</div>
           )}
         </div>
 
         {/* Ride Statistics */}
-        <div>
-          <p className="font-bold">RIDE STATISTICS:</p>
-          <div className="ml-4">
-            <p>Completed Rides: {ndr.completedRides || 0}</p>
-            <p>Cancelled Rides: {ndr.cancelledRides || 0}</p>
-            <p>Terminated Rides: {ndr.terminatedRides || 0}</p>
-            <p className="mt-2">Completed Riders: {ndr.completedRiders || 0}</p>
-            <p>Cancelled Riders: {ndr.cancelledRiders || 0}</p>
-            <p>Terminated Riders: {ndr.terminatedRiders || 0}</p>
+        <div className="section">
+          <div className="section-title">Ride Statistics</div>
+          <div className="stats-grid">
+            <div className="stat-item">
+              <div style={{fontSize: '14px', color: '#6b7280', marginBottom: '4px'}}>Completed Rides</div>
+              <div style={{fontSize: '24px', fontWeight: '700', color: '#059669'}}>{ndr.completedRides || 0}</div>
+            </div>
+            <div className="stat-item">
+              <div style={{fontSize: '14px', color: '#6b7280', marginBottom: '4px'}}>Cancelled Rides</div>
+              <div style={{fontSize: '24px', fontWeight: '700', color: '#dc2626'}}>{ndr.cancelledRides || 0}</div>
+            </div>
+            <div className="stat-item">
+              <div style={{fontSize: '14px', color: '#6b7280', marginBottom: '4px'}}>Terminated Rides</div>
+              <div style={{fontSize: '24px', fontWeight: '700', color: '#ea580c'}}>{ndr.terminatedRides || 0}</div>
+            </div>
+            <div className="stat-item">
+              <div style={{fontSize: '14px', color: '#6b7280', marginBottom: '4px'}}>Completed Riders</div>
+              <div style={{fontSize: '24px', fontWeight: '700', color: '#059669'}}>{ndr.completedRiders || 0}</div>
+            </div>
+            <div className="stat-item">
+              <div style={{fontSize: '14px', color: '#6b7280', marginBottom: '4px'}}>Cancelled Riders</div>
+              <div style={{fontSize: '24px', fontWeight: '700', color: '#dc2626'}}>{ndr.cancelledRiders || 0}</div>
+            </div>
+            <div className="stat-item">
+              <div style={{fontSize: '14px', color: '#6b7280', marginBottom: '4px'}}>Terminated Riders</div>
+              <div style={{fontSize: '24px', fontWeight: '700', color: '#ea580c'}}>{ndr.terminatedRiders || 0}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -2171,66 +2370,227 @@ const NotesTabViewOnly = ({ ndr, members }) => {
   const downloadReportAsPDF = () => {
     const printContent = document.getElementById('formatted-report-view');
     if (!printContent) return;
-    
+
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
       alert('Please allow popups to download the PDF');
       return;
     }
-    
+
+    // Get the current app URL for chat log links
+    const appUrl = window.location.origin;
+
     printWindow.document.write(`
       <!DOCTYPE html>
       <html>
         <head>
           <title>NDR Night Report - ${ndr.eventName}</title>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
           <style>
+            /* Reset and base styles */
+            * {
+              margin: 0;
+              padding: 0;
+              box-sizing: border-box;
+            }
+
             body {
-              font-family: Arial, sans-serif;
-              padding: 20px;
-              max-width: 800px;
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Helvetica Neue', Arial, sans-serif;
+              line-height: 1.6;
+              color: #1a1a1a;
+              background: #ffffff;
+              padding: 40px;
+              max-width: 900px;
               margin: 0 auto;
             }
-            h1 {
+
+            /* Header styles */
+            .report-header {
               text-align: center;
-              margin-bottom: 20px;
+              border-bottom: 3px solid #2563eb;
+              padding-bottom: 24px;
+              margin-bottom: 32px;
             }
+
+            h1 {
+              font-size: 32px;
+              font-weight: 700;
+              color: #1e40af;
+              margin-bottom: 8px;
+              letter-spacing: -0.5px;
+            }
+
             h2 {
-              margin-bottom: 10px;
+              font-size: 24px;
+              font-weight: 600;
+              color: #374151;
+              margin-bottom: 8px;
             }
+
             .date {
-              margin-bottom: 20px;
-              color: #666;
+              font-size: 16px;
+              color: #6b7280;
+              font-weight: 500;
             }
+
+            /* Section styles */
             .section {
+              margin-bottom: 28px;
+              padding: 20px;
+              background: #f9fafb;
+              border-radius: 8px;
+              border: 1px solid #e5e7eb;
+            }
+
+            .section-title {
+              font-size: 18px;
+              font-weight: 700;
+              color: #1e40af;
+              margin-bottom: 12px;
+              text-transform: uppercase;
+              letter-spacing: 0.5px;
+              border-bottom: 2px solid #dbeafe;
+              padding-bottom: 8px;
+            }
+
+            /* Content styles */
+            .content-row {
+              margin-bottom: 8px;
+              padding-left: 16px;
+            }
+
+            .content-row strong,
+            .font-bold {
+              font-weight: 600;
+              color: #374151;
+            }
+
+            .ml-4 {
+              margin-left: 24px;
+            }
+
+            .mt-2 {
+              margin-top: 12px;
+            }
+
+            /* Chat logs section */
+            .chat-logs {
+              margin-top: 32px;
+              padding: 20px;
+              background: #eff6ff;
+              border: 2px solid #2563eb;
+              border-radius: 8px;
+            }
+
+            .chat-logs-title {
+              font-size: 18px;
+              font-weight: 700;
+              color: #1e40af;
               margin-bottom: 16px;
             }
-            strong {
-              font-weight: bold;
+
+            .chat-link {
+              display: inline-block;
+              padding: 10px 16px;
+              margin: 8px 8px 8px 0;
+              background: #2563eb;
+              color: white;
+              text-decoration: none;
+              border-radius: 6px;
+              font-weight: 600;
+              font-size: 14px;
+              transition: background 0.2s;
             }
-            .font-bold {
-              font-weight: bold;
+
+            .chat-link:hover {
+              background: #1d4ed8;
             }
-            .ml-4 {
-              margin-left: 16px;
+
+            /* Statistics grid */
+            .stats-grid {
+              display: grid;
+              grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+              gap: 12px;
+              margin-top: 12px;
             }
-            .mt-2 {
-              margin-top: 8px;
+
+            .stat-item {
+              padding: 12px;
+              background: white;
+              border-radius: 6px;
+              border: 1px solid #e5e7eb;
             }
+
+            /* Print styles */
             @media print {
               @page {
-                margin: 1in;
+                margin: 0.75in;
+                size: letter;
+              }
+
+              body {
+                padding: 0;
+                background: white;
+              }
+
+              .chat-link {
+                color: #2563eb;
+                background: transparent;
+                border: 2px solid #2563eb;
+              }
+
+              .section {
+                page-break-inside: avoid;
+              }
+            }
+
+            /* Responsive adjustments */
+            @media (max-width: 768px) {
+              body {
+                padding: 20px;
+              }
+
+              h1 {
+                font-size: 24px;
+              }
+
+              h2 {
+                font-size: 20px;
+              }
+
+              .stats-grid {
+                grid-template-columns: 1fr;
               }
             }
           </style>
         </head>
         <body>
-          <h1>NDR Night Report</h1>
-          <h2>${ndr.eventName}</h2>
-          <p class="date">${new Date(ndr.eventDate).toLocaleDateString()}</p>
+          <div class="report-header">
+            <h1>NDR Night Report</h1>
+            <h2>${ndr.eventName}</h2>
+            <p class="date">${new Date(ndr.eventDate).toLocaleDateString('en-US', {
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric'
+            })}</p>
+          </div>
+
           ${printContent.innerHTML}
+
+          <div class="chat-logs">
+            <div class="chat-logs-title">Communication Logs</div>
+            <p style="margin-bottom: 12px; color: #374151;">View complete chat history from the event:</p>
+            <a href="${appUrl}/couch-navigator" class="chat-link" target="_blank">📱 View Couch & Navigator Chat Logs</a>
+            <p style="margin-top: 16px; font-size: 13px; color: #6b7280; font-style: italic;">
+              Note: Chat logs contain all communication between the couch (command center) and navigators (field operators) during the event.
+            </p>
+          </div>
+
           <script>
             window.onload = function() {
-              window.print();
+              setTimeout(() => window.print(), 250);
             }
           </script>
         </body>
