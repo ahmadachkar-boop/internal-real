@@ -9,7 +9,7 @@ import {
 } from '../capacitorUtils';
 import React, { useState, useEffect, useRef, memo } from 'react';
 import { db } from '../firebase';
-import { collection, addDoc, query, where, onSnapshot, orderBy, updateDoc, doc, Timestamp, getDocs, deleteDoc, getDoc } from 'firebase/firestore';
+import { collection, addDoc, query, where, onSnapshot, orderBy, updateDoc, doc, Timestamp, getDocs, deleteDoc, getDoc, setDoc } from 'firebase/firestore';
 import { useActiveNDR } from '../ActiveNDRContext';
 import { useAuth } from '../AuthContext';
 import { MapPin, Send, Navigation, Phone, User, Car, Clock, AlertCircle, MessageSquare, CheckCircle, Bell, BellOff, X, Wifi, WifiOff, CloudOff, RefreshCw } from 'lucide-react';
@@ -350,9 +350,9 @@ const CouchNavigator = () => {
       // Delete from Firestore
       try {
         const rideRef = doc(db, 'rides', rideId);
-        await updateDoc(rideRef, {
+        await setDoc(rideRef, {
           locationHistory: []
-        });
+        }, { merge: true });
         console.log(`🗑️ Deleted history from Firestore for completed ride ${rideId}`);
       } catch (error) {
         console.error(`❌ Error deleting history from Firestore for ride ${rideId}:`, error);
@@ -412,13 +412,13 @@ const CouchNavigator = () => {
   const saveHistoryToFirestore = async (rideId, history) => {
     try {
       const rideRef = doc(db, 'rides', rideId);
-      await updateDoc(rideRef, {
+      await setDoc(rideRef, {
         locationHistory: history.map(point => ({
           lat: point.lat,
           lng: point.lng,
           timestamp: Timestamp.now()
         }))
-      });
+      }, { merge: true });
       console.log(`💾 Saved history to Firestore for ride ${rideId} (${history.length} points)`);
     } catch (error) {
       console.error(`❌ Error saving history to Firestore for ride ${rideId}:`, error);
