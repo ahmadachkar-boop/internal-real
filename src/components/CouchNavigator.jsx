@@ -350,11 +350,15 @@ const CouchNavigator = () => {
 
   // Update or create history polyline for a ride
   const updateHistoryPolyline = (rideId, carNumber, newLocation) => {
-    if (!mapRef.current || !googleMapsLoaded || !window.google) return;
+    if (!mapRef.current || !googleMapsLoaded || !window.google) {
+      console.log(`⏭️ Cannot update history for ride ${rideId} - map not ready`);
+      return;
+    }
 
     // Initialize history for this ride if it doesn't exist
     if (!carLocationHistoryRef.current[rideId]) {
       carLocationHistoryRef.current[rideId] = [];
+      console.log(`📝 Initialized history array for ride ${rideId}`);
     }
 
     const history = carLocationHistoryRef.current[rideId];
@@ -364,6 +368,7 @@ const CouchNavigator = () => {
     const lastPoint = history[history.length - 1];
     if (!lastPoint || lastPoint.lat !== latLng.lat || lastPoint.lng !== latLng.lng) {
       history.push(latLng);
+      console.log(`📍 Added point to history for ride ${rideId}. Total points: ${history.length}`);
 
       // Keep only last 100 points to avoid performance issues
       if (history.length > 100) {
@@ -373,6 +378,7 @@ const CouchNavigator = () => {
       // Update or create polyline
       if (historyPolylinesRef.current[rideId]) {
         historyPolylinesRef.current[rideId].setPath(history);
+        console.log(`🔄 Updated existing history polyline for ride ${rideId}`);
       } else if (history.length > 1) {
         // Create new polyline only if we have at least 2 points
         const polyline = new window.google.maps.Polyline({
@@ -395,8 +401,12 @@ const CouchNavigator = () => {
         });
 
         historyPolylinesRef.current[rideId] = polyline;
-        console.log(`🔴 Created history trail for ride ${rideId} (${history.length} points)`);
+        console.log(`🔴 Created history trail for ride ${rideId} (${history.length} points)`, polyline);
+      } else {
+        console.log(`⏳ History has ${history.length} point(s), need at least 2 to draw polyline`);
       }
+    } else {
+      console.log(`⏭️ Location duplicate, not adding to history`);
     }
   };
 
@@ -1288,15 +1298,26 @@ const CouchNavigator = () => {
   useEffect(() => {
     if (!activeRides.length || !Object.keys(carLocations).length) return;
 
+    console.log('🔍 History tracking - Active rides:', activeRides.length, 'Car locations:', Object.keys(carLocations));
+
     // Update history for each active ride's car
     activeRides.forEach(ride => {
+      console.log(`🔍 Checking ride ${ride.id}: status=${ride.status}, carNumber=${ride.carNumber}`);
+
       if (ride.status === 'active' && ride.carNumber) {
         const carNum = ride.carNumber;
         const location = carLocations[carNum];
 
+        console.log(`🔍 Car ${carNum} location:`, location);
+
         if (location && location.latitude && location.longitude) {
+          console.log(`✅ Updating history for ride ${ride.id}, car ${carNum}`);
           updateHistoryPolyline(ride.id, carNum, location);
+        } else {
+          console.log(`❌ No valid location for car ${carNum}`);
         }
+      } else {
+        console.log(`⏭️ Skipping ride ${ride.id} - status:${ride.status}, carNumber:${ride.carNumber}`);
       }
     });
   }, [carLocations, activeRides]);
