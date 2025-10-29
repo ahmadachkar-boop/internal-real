@@ -1300,11 +1300,12 @@ const CouchNavigator = () => {
 
     console.log('🔍 History tracking - Active rides:', activeRides.length, 'Car locations:', Object.keys(carLocations));
 
-    // Update history for each active ride's car
+    // Update history for each ride that has a car assigned (both active and pending)
     activeRides.forEach(ride => {
       console.log(`🔍 Checking ride ${ride.id}: status=${ride.status}, carNumber=${ride.carNumber}`);
 
-      if (ride.status === 'active' && ride.carNumber) {
+      // Track history for any ride with a car assigned (pending or active)
+      if (ride.carNumber) {
         const carNum = ride.carNumber;
         const location = carLocations[carNum];
 
@@ -1317,7 +1318,7 @@ const CouchNavigator = () => {
           console.log(`❌ No valid location for car ${carNum}`);
         }
       } else {
-        console.log(`⏭️ Skipping ride ${ride.id} - status:${ride.status}, carNumber:${ride.carNumber}`);
+        console.log(`⏭️ Skipping ride ${ride.id} - no car assigned yet`);
       }
     });
   }, [carLocations, activeRides]);
