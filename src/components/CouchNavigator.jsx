@@ -8,6 +8,7 @@ import {
   getIOSSettingsInstructions
 } from '../capacitorUtils';
 import React, { useState, useEffect, useRef, memo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { db } from '../firebase';
 import { collection, addDoc, query, where, onSnapshot, orderBy, updateDoc, doc, Timestamp, getDocs, deleteDoc, getDoc, setDoc } from 'firebase/firestore';
 import { useActiveNDR } from '../ActiveNDRContext';
@@ -188,9 +189,23 @@ MessagesDisplay.displayName = 'MessagesDisplay';
 
 const CouchNavigator = () => {
   // ===== HOOKS MUST BE DECLARED FIRST =====
+  const [searchParams] = useSearchParams();
   const { activeNDR, loading: ndrLoading } = useActiveNDR();
   const { userProfile } = useAuth();
   const { isLoaded: googleMapsLoaded, loadError: googleMapsError } = useGoogleMaps();
+
+  // Check for historical view via query parameters
+  const ndrIdFromQuery = searchParams.get('ndrId');
+  const eventNameFromQuery = searchParams.get('eventName');
+  const isHistoricalView = !!ndrIdFromQuery;
+
+  // State for historical NDR data
+  const [historicalNDR, setHistoricalNDR] = useState(null);
+  const [historicalNDRLoading, setHistoricalNDRLoading] = useState(false);
+
+  // Use historical NDR if in historical view mode, otherwise use active NDR
+  const effectiveNDR = isHistoricalView ? historicalNDR : activeNDR;
+
   const [viewMode, setViewMode] = useState('couch');
   const [selectedCar, setSelectedCar] = useState(null);
   const [carNumber, setCarNumber] = useState('');
@@ -748,6 +763,38 @@ const CouchNavigator = () => {
   };
 
   // ===== EFFECTS =====
+
+  // Load historical NDR data when viewing via query parameters
+  useEffect(() => {
+    if (!ndrIdFromQuery) {
+      setHistoricalNDR(null);
+      setHistoricalNDRLoading(false);
+      return;
+    }
+
+    const loadHistoricalNDR = async () => {
+      setHistoricalNDRLoading(true);
+      try {
+        const ndrDoc = await getDoc(doc(db, 'ndrs', ndrIdFromQuery));
+        if (ndrDoc.exists()) {
+          setHistoricalNDR({
+            id: ndrDoc.id,
+            ...ndrDoc.data()
+          });
+        } else {
+          console.error('Historical NDR not found:', ndrIdFromQuery);
+          setHistoricalNDR(null);
+        }
+      } catch (error) {
+        console.error('Error loading historical NDR:', error);
+        setHistoricalNDR(null);
+      } finally {
+        setHistoricalNDRLoading(false);
+      }
+    };
+
+    loadHistoricalNDR();
+  }, [ndrIdFromQuery]);
 
   // Platform check
   useEffect(() => {
@@ -1457,20 +1504,20 @@ const CouchNavigator = () => {
   }, [activeNDR, userProfile]);
 
   useEffect(() => {
-    if (!activeNDR) {
+    if (!effectiveNDR) {
       navigationLogger.log('⏭️ No active NDR, skipping car load');
       return;
     }
 
-    navigationLogger.log('🚗 Loading cars for NDR:', activeNDR.id);
+    navigationLogger.log('🚗 Loading cars for NDR:', effectiveNDR.id);
 
     const loadCars = async () => {
       try {
-        const ndrDocRef = doc(db, 'ndrs', activeNDR.id);
+        const ndrDocRef = doc(db, 'ndrs', effectiveNDR.id);
         const ndrDoc = await getDoc(ndrDocRef);
-        
+
         console.log('📄 NDR document exists:', ndrDoc.exists());
-        
+
         if (ndrDoc.exists()) {
           const ndrData = ndrDoc.data();
           console.log('📋 NDR Data:', {
@@ -1480,12 +1527,12 @@ const CouchNavigator = () => {
             cars: ndrData.cars,
             assignments: ndrData.assignments
           });
-          
+
           let cars = [];
-          
+
           if (ndrData.cars && ndrData.cars.length > 0) {
             cars = ndrData.cars;
-          } 
+          }
           else if (ndrData.availableCars) {
             cars = Array.from({ length: ndrData.availableCars }, (_, i) => ({
               carNumber: i + 1,
@@ -1499,11 +1546,11 @@ const CouchNavigator = () => {
               driverName: null
             }));
           }
-          
+
           setAvailableCars(cars);
           console.log('✅ Set availableCars state to:', cars);
         } else {
-          console.log('❌ No NDR document found with ID:', activeNDR.id);
+          console.log('❌ No NDR document found with ID:', effectiveNDR.id);
         }
       } catch (error) {
         console.error('❌ Error loading cars:', error);
@@ -1511,14 +1558,14 @@ const CouchNavigator = () => {
     };
 
     loadCars();
-  }, [activeNDR]);
+  }, [effectiveNDR]);
 
   useEffect(() => {
-    if (!activeNDR) return;
+    if (!effectiveNDR) return;
 
     const locationsQuery = query(
       collection(db, 'carLocations'),
-      where('ndrId', '==', activeNDR.id)
+      where('ndrId', '==', effectiveNDR.id)
     );
 
     const unsubscribe = onSnapshot(locationsQuery, (snapshot) => {
@@ -1543,7 +1590,7 @@ const CouchNavigator = () => {
     });
 
     return () => unsubscribe();
-  }, [activeNDR, viewMode, selectedCar]);
+  }, [effectiveNDR, viewMode, selectedCar]);
 
   // Load history from Firestore on mount or when rides change
   useEffect(() => {
@@ -1624,7 +1671,7 @@ const CouchNavigator = () => {
   }, [activeRides]);
 
   useEffect(() => {
-    if (!activeNDR || !selectedCar) {
+    if (!effectiveNDR || !selectedCar) {
       messagesLogger.log('Message listener not active');
       return;
     }
@@ -1634,7 +1681,7 @@ const CouchNavigator = () => {
 
     const messagesQuery = query(
       collection(db, 'couchMessages'),
-      where('ndrId', '==', activeNDR.id),
+      where('ndrId', '==', effectiveNDR.id),
       where('carNumber', '==', carNum),
       orderBy('timestamp', 'asc')
     );
@@ -1726,11 +1773,11 @@ const CouchNavigator = () => {
     );
 
     return () => unsubscribe();
-  }, [activeNDR, selectedCar, viewMode]);
+  }, [effectiveNDR, selectedCar, viewMode]);
 
   // Typing indicator listener
   useEffect(() => {
-    if (!activeNDR || !activeNDR.id || !selectedCar) {
+    if (!effectiveNDR || !effectiveNDR.id || !selectedCar) {
       setIsOtherTyping(false);
       return;
     }
@@ -1745,7 +1792,7 @@ const CouchNavigator = () => {
     console.log(`⌨️ Setting up typing listener for car ${carNum}`);
 
     try {
-      const unsubscribe = listenToTypingStatus(activeNDR.id, carNum, viewMode, (isTyping) => {
+      const unsubscribe = listenToTypingStatus(effectiveNDR.id, carNum, viewMode, (isTyping) => {
         setIsOtherTyping(isTyping);
       });
 
@@ -1764,18 +1811,18 @@ const CouchNavigator = () => {
       setIsOtherTyping(false);
       return () => {};
     }
-  }, [activeNDR, selectedCar, viewMode]);
+  }, [effectiveNDR, selectedCar, viewMode]);
 
   useEffect(() => {
-    if (!activeNDR) return;
-    
+    if (!effectiveNDR) return;
+
     if (viewMode === 'navigator' && !selectedCar) return;
 
     let ridesQuery;
     if (viewMode === 'couch' && selectedCar) {
       ridesQuery = query(
         collection(db, 'rides'),
-        where('ndrId', '==', activeNDR.id),
+        where('ndrId', '==', effectiveNDR.id),
         where('carNumber', '==', parseInt(selectedCar, 10)),
         where('status', 'in', ['active', 'pending'])
       );
@@ -1783,13 +1830,13 @@ const CouchNavigator = () => {
       // Couch view without selected car - show ALL active/pending rides
       ridesQuery = query(
         collection(db, 'rides'),
-        where('ndrId', '==', activeNDR.id),
+        where('ndrId', '==', effectiveNDR.id),
         where('status', 'in', ['active', 'pending'])
       );
     } else if (viewMode === 'navigator' && selectedCar) {
       ridesQuery = query(
         collection(db, 'rides'),
-        where('ndrId', '==', activeNDR.id),
+        where('ndrId', '==', effectiveNDR.id),
         where('carNumber', '==', parseInt(selectedCar, 10)),
         where('status', '==', 'active')
       );
@@ -1822,7 +1869,7 @@ const CouchNavigator = () => {
     );
 
     return () => unsubscribe();
-  }, [activeNDR, selectedCar, viewMode]);
+  }, [effectiveNDR, selectedCar, viewMode]);
 
   const calculateDistance = (lat1, lon1, lat2, lon2) => {
     const R = 6371e3;
@@ -2258,7 +2305,13 @@ const CouchNavigator = () => {
   };
 
   const sendMessage = async () => {
-    if (!newMessage.trim() || !selectedCar || !activeNDR) {
+    // Prevent sending messages in historical view mode
+    if (isHistoricalView) {
+      console.log('Message send blocked - historical view mode');
+      return;
+    }
+
+    if (!newMessage.trim() || !selectedCar || !effectiveNDR) {
       console.log('Message send blocked');
       return;
     }
@@ -2269,7 +2322,7 @@ const CouchNavigator = () => {
     const carNum = parseInt(selectedCar, 10);
 
     const messageData = {
-      ndrId: activeNDR.id,
+      ndrId: effectiveNDR.id,
       carNumber: carNum,
       sender: viewMode,
       senderName: userProfile?.name || (viewMode === 'couch' ? 'Couch' : 'Navigator'),
@@ -2383,7 +2436,40 @@ const CouchNavigator = () => {
     );
   }
 
-  if (!activeNDR) {
+  // Show loading state for historical NDR
+  if (isHistoricalView && historicalNDRLoading) {
+    return (
+      <div className="space-y-6 p-4">
+        <h2 className="text-3xl font-bold text-gray-900">Loading Chat Logs...</h2>
+        <div className="bg-blue-50 border-2 border-blue-400 rounded-xl p-8 text-center">
+          <RefreshCw className="mx-auto mb-4 text-blue-600 animate-spin" size={64} />
+          <h3 className="text-xl font-bold text-gray-800 mb-2">Loading Historical Data</h3>
+          <p className="text-gray-600">
+            Fetching chat logs for {eventNameFromQuery || 'this event'}...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error if historical NDR not found
+  if (isHistoricalView && !historicalNDR) {
+    return (
+      <div className="space-y-6 p-4">
+        <h2 className="text-3xl font-bold text-gray-900">Chat Logs Not Found</h2>
+        <div className="bg-red-50 border-2 border-red-400 rounded-xl p-8 text-center">
+          <AlertCircle className="mx-auto mb-4 text-red-600" size={64} />
+          <h3 className="text-xl font-bold text-gray-800 mb-2">NDR Not Found</h3>
+          <p className="text-gray-600">
+            The requested NDR (ID: {ndrIdFromQuery}) could not be found.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show no active NDR message only if not in historical view
+  if (!effectiveNDR && !isHistoricalView) {
     return (
       <div className="space-y-6 p-4">
         <h2 className="text-3xl font-bold text-gray-900">Couch Navigator</h2>
@@ -2398,39 +2484,42 @@ const CouchNavigator = () => {
     );
   }
 
-  // Show loading state while checking assignment
-  if (assignmentLoading) {
-    return (
-      <div className="space-y-6 p-4">
-        <h2 className="text-3xl font-bold text-gray-900">Couch Navigator</h2>
-        <div className="bg-blue-50 border-2 border-blue-400 rounded-xl p-8 text-center">
-          <RefreshCw className="mx-auto mb-4 text-blue-600 animate-spin" size={64} />
-          <h3 className="text-xl font-bold text-gray-800 mb-2">Checking Assignment...</h3>
-          <p className="text-gray-600">
-            Verifying your role assignment for this NDR.
-          </p>
+  // Skip assignment checks for historical view mode
+  if (!isHistoricalView) {
+    // Show loading state while checking assignment
+    if (assignmentLoading) {
+      return (
+        <div className="space-y-6 p-4">
+          <h2 className="text-3xl font-bold text-gray-900">Couch Navigator</h2>
+          <div className="bg-blue-50 border-2 border-blue-400 rounded-xl p-8 text-center">
+            <RefreshCw className="mx-auto mb-4 text-blue-600 animate-spin" size={64} />
+            <h3 className="text-xl font-bold text-gray-800 mb-2">Checking Assignment...</h3>
+            <p className="text-gray-600">
+              Verifying your role assignment for this NDR.
+            </p>
+          </div>
         </div>
-      </div>
-    );
-  }
+      );
+    }
 
-  // Block unassigned users
-  if (userAssignment && userAssignment.type === 'unassigned') {
-    return (
-      <div className="space-y-6 p-4">
-        <h2 className="text-3xl font-bold text-gray-900">Couch Navigator</h2>
-        <div className="bg-red-50 border-2 border-red-400 rounded-xl p-8 text-center">
-          <AlertCircle className="mx-auto mb-4 text-red-600" size={64} />
-          <h3 className="text-xl font-bold text-gray-800 mb-2">Access Restricted</h3>
-          <p className="text-gray-600 mb-4">
-            You are not assigned to any role for this NDR. Only assigned navigators and couch users can access this section.
-          </p>
-          <p className="text-sm text-gray-500">
-            If you believe this is an error, please contact your Director of Cars or Director of Night.
-          </p>
+    // Block unassigned users
+    if (userAssignment && userAssignment.type === 'unassigned') {
+      return (
+        <div className="space-y-6 p-4">
+          <h2 className="text-3xl font-bold text-gray-900">Couch Navigator</h2>
+          <div className="bg-red-50 border-2 border-red-400 rounded-xl p-8 text-center">
+            <AlertCircle className="mx-auto mb-4 text-red-600" size={64} />
+            <h3 className="text-xl font-bold text-gray-800 mb-2">Access Restricted</h3>
+            <p className="text-gray-600 mb-4">
+              You are not assigned to any role for this NDR. Only assigned navigators and couch users can access this section.
+            </p>
+            <p className="text-sm text-gray-500">
+              If you believe this is an error, please contact your Director of Cars or Director of Night.
+            </p>
+          </div>
         </div>
-      </div>
-    );
+      );
+    }
   }
 
   return (
@@ -2440,9 +2529,29 @@ const CouchNavigator = () => {
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">
             Couch Navigator
           </h1>
-          
+
+          {/* Historical View Banner */}
+          {isHistoricalView && (
+            <div className="bg-amber-50 border-2 border-amber-400 rounded-lg px-4 py-3">
+              <div className="flex items-start gap-2">
+                <Clock className="text-amber-600 flex-shrink-0 mt-0.5" size={20} />
+                <div>
+                  <p className="text-sm font-bold text-amber-900">
+                    Historical Chat Logs
+                  </p>
+                  <p className="text-xs text-amber-700 mt-1">
+                    Viewing archived communication from: {eventNameFromQuery || 'Past Event'}
+                  </p>
+                  <p className="text-xs text-amber-600 mt-1 italic">
+                    Read-only mode - Message sending and live features are disabled
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Show role badge for car navigators */}
-          {userAssignment && userAssignment.type === 'car' && (
+          {!isHistoricalView && userAssignment && userAssignment.type === 'car' && (
             <div className="bg-blue-50 border border-blue-300 rounded-lg px-4 py-2 mb-2">
               <p className="text-sm font-semibold text-blue-800">
                 🚗 Assigned to Car {userAssignment.carNumber}
@@ -2454,7 +2563,7 @@ const CouchNavigator = () => {
           )}
 
           {/* Show role badge for couch users */}
-          {userAssignment && userAssignment.type === 'couch' && (
+          {!isHistoricalView && userAssignment && userAssignment.type === 'couch' && (
             <div className="bg-green-50 border border-green-300 rounded-lg px-4 py-2 mb-2">
               <p className="text-sm font-semibold text-green-800">
                 🛋️ Couch Navigator
@@ -2466,7 +2575,7 @@ const CouchNavigator = () => {
           )}
 
           {/* Mode switching buttons - only show for couch users */}
-          {userAssignment && userAssignment.type === 'couch' && (
+          {!isHistoricalView && userAssignment && userAssignment.type === 'couch' && (
             <div className="flex flex-wrap gap-2">
               <button
                 onClick={() => {
@@ -2881,42 +2990,47 @@ const CouchNavigator = () => {
                       value={newMessage}
                       onChange={(e) => {
                         setNewMessage(e.target.value);
-                        // Send typing indicator
-                        try {
-                          if (activeNDR && activeNDR.id && selectedCar) {
-                            handleTypingIndicator(
-                              activeNDR.id,
-                              parseInt(selectedCar, 10),
-                              viewMode,
-                              e.target.value.length > 0
-                            );
+                        // Send typing indicator (skip in historical view)
+                        if (!isHistoricalView) {
+                          try {
+                            if (effectiveNDR && effectiveNDR.id && selectedCar) {
+                              handleTypingIndicator(
+                                effectiveNDR.id,
+                                parseInt(selectedCar, 10),
+                                viewMode,
+                                e.target.value.length > 0
+                              );
+                            }
+                          } catch (error) {
+                            console.error('Error setting typing indicator:', error);
                           }
-                        } catch (error) {
-                          console.error('Error setting typing indicator:', error);
                         }
                       }}
-                      onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+                      onKeyPress={(e) => e.key === 'Enter' && !isHistoricalView && sendMessage()}
                       onBlur={() => {
-                        // Clear typing indicator when focus lost
-                        try {
-                          if (activeNDR && activeNDR.id && selectedCar) {
-                            handleTypingIndicator(
-                              activeNDR.id,
-                              parseInt(selectedCar, 10),
-                              viewMode,
-                              false
-                            );
+                        // Clear typing indicator when focus lost (skip in historical view)
+                        if (!isHistoricalView) {
+                          try {
+                            if (effectiveNDR && effectiveNDR.id && selectedCar) {
+                              handleTypingIndicator(
+                                effectiveNDR.id,
+                                parseInt(selectedCar, 10),
+                                viewMode,
+                                false
+                              );
+                            }
+                          } catch (error) {
+                            console.error('Error clearing typing indicator:', error);
                           }
-                        } catch (error) {
-                          console.error('Error clearing typing indicator:', error);
                         }
                       }}
-                      placeholder="Type a message..."
-                      className="flex-1 px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-blue-600 outline-none"
+                      placeholder={isHistoricalView ? "Read-only mode" : "Type a message..."}
+                      disabled={isHistoricalView}
+                      className="flex-1 px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-blue-600 outline-none disabled:bg-gray-100 disabled:cursor-not-allowed"
                     />
                     <button
                       onClick={sendMessage}
-                      disabled={sendingMessage || !newMessage.trim()}
+                      disabled={sendingMessage || !newMessage.trim() || isHistoricalView}
                       className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                     >
                       {sendingMessage ? (
@@ -3053,42 +3167,47 @@ const CouchNavigator = () => {
                       value={newMessage}
                       onChange={(e) => {
                         setNewMessage(e.target.value);
-                        // Send typing indicator
-                        try {
-                          if (activeNDR && activeNDR.id && selectedCar) {
-                            handleTypingIndicator(
-                              activeNDR.id,
-                              parseInt(selectedCar, 10),
-                              viewMode,
-                              e.target.value.length > 0
-                            );
+                        // Send typing indicator (skip in historical view)
+                        if (!isHistoricalView) {
+                          try {
+                            if (effectiveNDR && effectiveNDR.id && selectedCar) {
+                              handleTypingIndicator(
+                                effectiveNDR.id,
+                                parseInt(selectedCar, 10),
+                                viewMode,
+                                e.target.value.length > 0
+                              );
+                            }
+                          } catch (error) {
+                            console.error('Error setting typing indicator:', error);
                           }
-                        } catch (error) {
-                          console.error('Error setting typing indicator:', error);
                         }
                       }}
-                      onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+                      onKeyPress={(e) => e.key === 'Enter' && !isHistoricalView && sendMessage()}
                       onBlur={() => {
-                        // Clear typing indicator when focus lost
-                        try {
-                          if (activeNDR && activeNDR.id && selectedCar) {
-                            handleTypingIndicator(
-                              activeNDR.id,
-                              parseInt(selectedCar, 10),
-                              viewMode,
-                              false
-                            );
+                        // Clear typing indicator when focus lost (skip in historical view)
+                        if (!isHistoricalView) {
+                          try {
+                            if (effectiveNDR && effectiveNDR.id && selectedCar) {
+                              handleTypingIndicator(
+                                effectiveNDR.id,
+                                parseInt(selectedCar, 10),
+                                viewMode,
+                                false
+                              );
+                            }
+                          } catch (error) {
+                            console.error('Error clearing typing indicator:', error);
                           }
-                        } catch (error) {
-                          console.error('Error clearing typing indicator:', error);
                         }
                       }}
-                      placeholder="Type a message..."
-                      className="flex-1 px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-blue-600 outline-none"
+                      placeholder={isHistoricalView ? "Read-only mode" : "Type a message..."}
+                      disabled={isHistoricalView}
+                      className="flex-1 px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-600 focus:border-blue-600 outline-none disabled:bg-gray-100 disabled:cursor-not-allowed"
                     />
                     <button
                       onClick={sendMessage}
-                      disabled={sendingMessage || !newMessage.trim()}
+                      disabled={sendingMessage || !newMessage.trim() || isHistoricalView}
                       className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                     >
                       {sendingMessage ? (
