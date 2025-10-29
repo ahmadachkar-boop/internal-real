@@ -45,11 +45,11 @@ try {
       })
     });
   } else {
-    // Web platform - use single tab manager
-    firebaseLogger.log('🔧 Initializing Firestore for Web platform with single-tab cache');
+    // Web platform - use multiple tab manager to support multi-tab access
+    firebaseLogger.log('🔧 Initializing Firestore for Web platform with multi-tab cache');
     db = initializeFirestore(app, {
       localCache: persistentLocalCache({
-        tabManager: persistentSingleTabManager()
+        tabManager: persistentMultipleTabManager()
       })
     });
   }

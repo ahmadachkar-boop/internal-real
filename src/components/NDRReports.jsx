@@ -1608,67 +1608,69 @@ const NotesTabEditable = ({ notes, setNotes, ndrId, assignments, members, ndr })
 
             body {
               font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Helvetica Neue', Arial, sans-serif;
-              line-height: 1.6;
+              line-height: 1.4;
               color: #1a1a1a;
               background: #ffffff;
-              padding: 40px;
+              padding: 20px;
               max-width: 900px;
               margin: 0 auto;
+              font-size: 13px;
             }
 
             /* Header styles */
             .report-header {
               text-align: center;
-              border-bottom: 3px solid #2563eb;
-              padding-bottom: 24px;
-              margin-bottom: 32px;
+              border-bottom: 2px solid #2563eb;
+              padding-bottom: 12px;
+              margin-bottom: 16px;
             }
 
             h1 {
-              font-size: 32px;
+              font-size: 22px;
               font-weight: 700;
               color: #1e40af;
-              margin-bottom: 8px;
+              margin-bottom: 6px;
               letter-spacing: -0.5px;
             }
 
             h2 {
-              font-size: 24px;
+              font-size: 16px;
               font-weight: 600;
               color: #374151;
-              margin-bottom: 8px;
+              margin-bottom: 4px;
             }
 
             .date {
-              font-size: 16px;
+              font-size: 13px;
               color: #6b7280;
               font-weight: 500;
             }
 
             /* Section styles */
             .section {
-              margin-bottom: 28px;
-              padding: 20px;
+              margin-bottom: 12px;
+              padding: 10px 12px;
               background: #f9fafb;
-              border-radius: 8px;
+              border-radius: 6px;
               border: 1px solid #e5e7eb;
             }
 
             .section-title {
-              font-size: 18px;
+              font-size: 13px;
               font-weight: 700;
               color: #1e40af;
-              margin-bottom: 12px;
+              margin-bottom: 6px;
               text-transform: uppercase;
               letter-spacing: 0.5px;
-              border-bottom: 2px solid #dbeafe;
-              padding-bottom: 8px;
+              border-bottom: 1.5px solid #dbeafe;
+              padding-bottom: 4px;
             }
 
             /* Content styles */
             .content-row {
-              margin-bottom: 8px;
-              padding-left: 16px;
+              margin-bottom: 4px;
+              padding-left: 10px;
+              font-size: 12px;
             }
 
             .content-row strong,
@@ -1678,39 +1680,39 @@ const NotesTabEditable = ({ notes, setNotes, ndrId, assignments, members, ndr })
             }
 
             .ml-4 {
-              margin-left: 24px;
+              margin-left: 16px;
             }
 
             .mt-2 {
-              margin-top: 12px;
+              margin-top: 8px;
             }
 
             /* Chat logs section */
             .chat-logs {
-              margin-top: 32px;
-              padding: 20px;
+              margin-top: 16px;
+              padding: 12px;
               background: #eff6ff;
-              border: 2px solid #2563eb;
-              border-radius: 8px;
+              border: 1.5px solid #2563eb;
+              border-radius: 6px;
             }
 
             .chat-logs-title {
-              font-size: 18px;
+              font-size: 13px;
               font-weight: 700;
               color: #1e40af;
-              margin-bottom: 16px;
+              margin-bottom: 8px;
             }
 
             .chat-link {
               display: inline-block;
-              padding: 10px 16px;
-              margin: 8px 8px 8px 0;
+              padding: 6px 10px;
+              margin: 6px 6px 6px 0;
               background: #2563eb;
               color: white;
               text-decoration: none;
-              border-radius: 6px;
+              border-radius: 4px;
               font-weight: 600;
-              font-size: 14px;
+              font-size: 11px;
               transition: background 0.2s;
             }
 
@@ -1721,38 +1723,43 @@ const NotesTabEditable = ({ notes, setNotes, ndrId, assignments, members, ndr })
             /* Statistics grid */
             .stats-grid {
               display: grid;
-              grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-              gap: 12px;
-              margin-top: 12px;
+              grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+              gap: 8px;
+              margin-top: 8px;
             }
 
             .stat-item {
-              padding: 12px;
+              padding: 8px;
               background: white;
-              border-radius: 6px;
+              border-radius: 4px;
               border: 1px solid #e5e7eb;
+              font-size: 12px;
             }
 
             /* Print styles */
             @media print {
               @page {
-                margin: 0.75in;
+                margin: 0.5in;
                 size: letter;
               }
 
               body {
                 padding: 0;
                 background: white;
+                font-size: 12px;
               }
 
               .chat-link {
                 color: #2563eb;
                 background: transparent;
-                border: 2px solid #2563eb;
+                border: 1.5px solid #2563eb;
+                padding: 4px 8px;
+                font-size: 10px;
               }
 
               .section {
                 page-break-inside: avoid;
+                margin-bottom: 10px;
               }
             }
 
@@ -1792,9 +1799,9 @@ const NotesTabEditable = ({ notes, setNotes, ndrId, assignments, members, ndr })
 
           <div class="chat-logs">
             <div class="chat-logs-title">Communication Logs</div>
-            <p style="margin-bottom: 12px; color: #374151;">View complete chat history from the event:</p>
-            <a href="${appUrl}/couch-navigator" class="chat-link" target="_blank">📱 View Couch & Navigator Chat Logs</a>
-            <p style="margin-top: 16px; font-size: 13px; color: #6b7280; font-style: italic;">
+            <p style="margin-bottom: 8px; color: #374151; font-size: 12px;">View complete chat history from the event:</p>
+            <a href="${appUrl}/couch-navigator?ndrId=${ndr.id}&eventName=${encodeURIComponent(ndr.eventName)}" class="chat-link" target="_blank">📱 View Couch & Navigator Chat Logs</a>
+            <p style="margin-top: 10px; font-size: 11px; color: #6b7280; font-style: italic;">
               Note: Chat logs contain all communication between the couch (command center) and navigators (field operators) during the event.
             </p>
           </div>
@@ -2397,67 +2404,69 @@ const NotesTabViewOnly = ({ ndr, members }) => {
 
             body {
               font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Helvetica Neue', Arial, sans-serif;
-              line-height: 1.6;
+              line-height: 1.4;
               color: #1a1a1a;
               background: #ffffff;
-              padding: 40px;
+              padding: 20px;
               max-width: 900px;
               margin: 0 auto;
+              font-size: 13px;
             }
 
             /* Header styles */
             .report-header {
               text-align: center;
-              border-bottom: 3px solid #2563eb;
-              padding-bottom: 24px;
-              margin-bottom: 32px;
+              border-bottom: 2px solid #2563eb;
+              padding-bottom: 12px;
+              margin-bottom: 16px;
             }
 
             h1 {
-              font-size: 32px;
+              font-size: 22px;
               font-weight: 700;
               color: #1e40af;
-              margin-bottom: 8px;
+              margin-bottom: 6px;
               letter-spacing: -0.5px;
             }
 
             h2 {
-              font-size: 24px;
+              font-size: 16px;
               font-weight: 600;
               color: #374151;
-              margin-bottom: 8px;
+              margin-bottom: 4px;
             }
 
             .date {
-              font-size: 16px;
+              font-size: 13px;
               color: #6b7280;
               font-weight: 500;
             }
 
             /* Section styles */
             .section {
-              margin-bottom: 28px;
-              padding: 20px;
+              margin-bottom: 12px;
+              padding: 10px 12px;
               background: #f9fafb;
-              border-radius: 8px;
+              border-radius: 6px;
               border: 1px solid #e5e7eb;
             }
 
             .section-title {
-              font-size: 18px;
+              font-size: 13px;
               font-weight: 700;
               color: #1e40af;
-              margin-bottom: 12px;
+              margin-bottom: 6px;
               text-transform: uppercase;
               letter-spacing: 0.5px;
-              border-bottom: 2px solid #dbeafe;
-              padding-bottom: 8px;
+              border-bottom: 1.5px solid #dbeafe;
+              padding-bottom: 4px;
             }
 
             /* Content styles */
             .content-row {
-              margin-bottom: 8px;
-              padding-left: 16px;
+              margin-bottom: 4px;
+              padding-left: 10px;
+              font-size: 12px;
             }
 
             .content-row strong,
@@ -2467,39 +2476,39 @@ const NotesTabViewOnly = ({ ndr, members }) => {
             }
 
             .ml-4 {
-              margin-left: 24px;
+              margin-left: 16px;
             }
 
             .mt-2 {
-              margin-top: 12px;
+              margin-top: 8px;
             }
 
             /* Chat logs section */
             .chat-logs {
-              margin-top: 32px;
-              padding: 20px;
+              margin-top: 16px;
+              padding: 12px;
               background: #eff6ff;
-              border: 2px solid #2563eb;
-              border-radius: 8px;
+              border: 1.5px solid #2563eb;
+              border-radius: 6px;
             }
 
             .chat-logs-title {
-              font-size: 18px;
+              font-size: 13px;
               font-weight: 700;
               color: #1e40af;
-              margin-bottom: 16px;
+              margin-bottom: 8px;
             }
 
             .chat-link {
               display: inline-block;
-              padding: 10px 16px;
-              margin: 8px 8px 8px 0;
+              padding: 6px 10px;
+              margin: 6px 6px 6px 0;
               background: #2563eb;
               color: white;
               text-decoration: none;
-              border-radius: 6px;
+              border-radius: 4px;
               font-weight: 600;
-              font-size: 14px;
+              font-size: 11px;
               transition: background 0.2s;
             }
 
@@ -2510,38 +2519,43 @@ const NotesTabViewOnly = ({ ndr, members }) => {
             /* Statistics grid */
             .stats-grid {
               display: grid;
-              grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-              gap: 12px;
-              margin-top: 12px;
+              grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+              gap: 8px;
+              margin-top: 8px;
             }
 
             .stat-item {
-              padding: 12px;
+              padding: 8px;
               background: white;
-              border-radius: 6px;
+              border-radius: 4px;
               border: 1px solid #e5e7eb;
+              font-size: 12px;
             }
 
             /* Print styles */
             @media print {
               @page {
-                margin: 0.75in;
+                margin: 0.5in;
                 size: letter;
               }
 
               body {
                 padding: 0;
                 background: white;
+                font-size: 12px;
               }
 
               .chat-link {
                 color: #2563eb;
                 background: transparent;
-                border: 2px solid #2563eb;
+                border: 1.5px solid #2563eb;
+                padding: 4px 8px;
+                font-size: 10px;
               }
 
               .section {
                 page-break-inside: avoid;
+                margin-bottom: 10px;
               }
             }
 
@@ -2581,9 +2595,9 @@ const NotesTabViewOnly = ({ ndr, members }) => {
 
           <div class="chat-logs">
             <div class="chat-logs-title">Communication Logs</div>
-            <p style="margin-bottom: 12px; color: #374151;">View complete chat history from the event:</p>
-            <a href="${appUrl}/couch-navigator" class="chat-link" target="_blank">📱 View Couch & Navigator Chat Logs</a>
-            <p style="margin-top: 16px; font-size: 13px; color: #6b7280; font-style: italic;">
+            <p style="margin-bottom: 8px; color: #374151; font-size: 12px;">View complete chat history from the event:</p>
+            <a href="${appUrl}/couch-navigator?ndrId=${ndr.id}&eventName=${encodeURIComponent(ndr.eventName)}" class="chat-link" target="_blank">📱 View Couch & Navigator Chat Logs</a>
+            <p style="margin-top: 10px; font-size: 11px; color: #6b7280; font-style: italic;">
               Note: Chat logs contain all communication between the couch (command center) and navigators (field operators) during the event.
             </p>
           </div>
