@@ -15,6 +15,7 @@ const FALLBACK_ETA_FREE_CAR = 10; // Default ETA when car location unknown (free
 const FALLBACK_ETA_BUSY_CAR = 30; // Default ETA when calculation fails (busy car)
 const ETA_DEBOUNCE_MS = 45000; // 45 seconds between ETA recalculations
 const ETA_CACHE_MS = 300000; // 5 minutes ETA cache duration
+const ETA_REFRESH_INTERVAL_MS = 180000; // 3 minutes - periodic ETA refresh
 const API_RATE_LIMIT_PER_HOUR = 500; // Max Google Maps API calls per hour
 const API_RESET_INTERVAL_MS = 3600000; // 1 hour in milliseconds
 const LONG_WAIT_THRESHOLD_MINUTES = 15; // Minutes before wait is considered long
@@ -428,6 +429,28 @@ const RideManagement = () => {
 
     return () => clearTimeout(timer);
   }, [rides.pending, rides.active, carLocations, availableCars, googleMapsLoaded, activeNDR]);
+
+  // NEW: Periodic ETA refresh (every 3 minutes)
+  // This ensures ETAs stay fresh even if nothing changes
+  // Real-time listeners (onSnapshot) will automatically update UI when Firestore changes
+  useEffect(() => {
+    if (!activeNDR || !googleMapsLoaded || !window.google || rides.pending.length === 0) {
+      return;
+    }
+
+    console.log('📡 Setting up periodic ETA refresh (every 3 minutes)');
+
+    // Trigger periodic refresh
+    const refreshInterval = setInterval(() => {
+      console.log('🔄 Periodic ETA refresh triggered');
+      calculateAndStoreETAs();
+    }, ETA_REFRESH_INTERVAL_MS);
+
+    return () => {
+      console.log('🛑 Clearing periodic ETA refresh');
+      clearInterval(refreshInterval);
+    };
+  }, [activeNDR, googleMapsLoaded]); // Only depend on these - don't want to reset interval when rides change
 
   // NEW: Check for multi-ride pickup opportunities
   useEffect(() => {
