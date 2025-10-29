@@ -135,6 +135,14 @@ extension AppDelegate: MessagingDelegate {
     func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
         print("Firebase registration token: \(String(describing: fcmToken))")
 
+        // Save FCM token to UserDefaults so JavaScript can access it via Capacitor Preferences
+        if let token = fcmToken {
+            UserDefaults.standard.set(token, forKey: "FCMToken")
+            UserDefaults.standard.synchronize()
+            print("✅ FCM token saved to UserDefaults")
+        }
+
+        // Also post to NotificationCenter for any native listeners
         let dataDict: [String: String] = ["token": fcmToken ?? ""]
         NotificationCenter.default.post(
             name: Notification.Name("FCMToken"),

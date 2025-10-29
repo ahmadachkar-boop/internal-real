@@ -207,25 +207,41 @@ export const registerPushNotificationListeners = async () => {
  * @param {string} userId - User ID to associate token with
  */
 export const savePendingFCMToken = async (userId) => {
-  if (!isNativeApp || !userId) return;
+  console.log('🔍 savePendingFCMToken called with userId:', userId, 'isNativeApp:', isNativeApp);
+
+  if (!isNativeApp) {
+    console.log('⚠️ Skipping - not a native app');
+    return;
+  }
+
+  if (!userId) {
+    console.log('⚠️ Skipping - no userId provided');
+    return;
+  }
 
   try {
+    console.log('🔍 Checking for FCM token in memory...');
     let tokenToSave = pendingToken;
+    console.log('🔍 Token in memory:', tokenToSave ? tokenToSave.substring(0, 20) + '...' : 'null');
 
     // If no token in memory, check Preferences
     if (!tokenToSave) {
+      console.log('🔍 Checking pendingFCMToken in Preferences...');
       const { value } = await Preferences.get({ key: 'pendingFCMToken' });
       tokenToSave = value;
+      console.log('🔍 pendingFCMToken:', tokenToSave ? tokenToSave.substring(0, 20) + '...' : 'null');
     }
 
     // Also check iOS UserDefaults (set by AppDelegate)
     if (!tokenToSave && Capacitor.getPlatform() === 'ios') {
+      console.log('🔍 Checking FCMToken in iOS UserDefaults...');
       const { value } = await Preferences.get({ key: 'FCMToken' });
       tokenToSave = value;
+      console.log('🔍 FCMToken from UserDefaults:', tokenToSave ? tokenToSave.substring(0, 20) + '...' : 'null');
     }
 
     if (tokenToSave) {
-      console.log('✅ Found pending FCM token, saving to Firestore...');
+      console.log('✅ Found FCM token, saving to Firestore for user:', userId);
 
       await setDoc(doc(db, 'fcmTokens', userId), {
         token: tokenToSave,
@@ -234,13 +250,13 @@ export const savePendingFCMToken = async (userId) => {
         userId
       });
 
-      console.log('✅ FCM token saved to Firestore!');
+      console.log('✅ FCM token successfully saved to Firestore!');
 
       // Clear pending token
       pendingToken = null;
       await Preferences.remove({ key: 'pendingFCMToken' });
     } else {
-      console.log('⚠️ No pending FCM token found');
+      console.error('❌ No FCM token found in any location (memory, pendingFCMToken, or FCMToken)');
     }
   } catch (error) {
     console.error('❌ Error saving pending FCM token:', error);
