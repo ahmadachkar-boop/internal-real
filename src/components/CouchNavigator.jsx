@@ -237,6 +237,7 @@ const CouchNavigator = () => {
   const directionsRendererRef = useRef(null);
   const routePolylineRef = useRef(null);
   const lastRenderedRouteRef = useRef(null);
+  const fcmTokenUploadedRef = useRef(false); // Track if FCM token has been uploaded
   const initialMapCenterRef = useRef(null);
   const isMountedRef = useRef(true); // Track component mount status
   const lastNotifiedMessageIdRef = useRef(null); // Track last notified message to prevent duplicates
@@ -529,9 +530,8 @@ const CouchNavigator = () => {
 
       try {
         if (isNativeApp) {
-          // Save any pending FCM token that was captured on app startup
-          await savePendingFCMToken(userProfile.uid);
-          console.log('✅ Native push notifications initialized and token saved');
+          // Native push notifications - token will be uploaded after role assignment
+          console.log('✅ Native push notifications ready (token upload happens after role assignment)');
         } else {
           // Initialize web FCM
           try {
@@ -1039,6 +1039,15 @@ const CouchNavigator = () => {
           setUserAssignment({ type: 'couch' });
           setViewMode('couch');
           // Couch users can select cars manually
+
+          // Upload FCM token after role confirmation (only once)
+          if (isNativeApp && !fcmTokenUploadedRef.current) {
+            fcmTokenUploadedRef.current = true;
+            savePendingFCMToken(userId).catch(error => {
+              console.error('❌ Failed to upload FCM token:', error);
+              fcmTokenUploadedRef.current = false; // Allow retry on next assignment check
+            });
+          }
         }
         // Check if user is assigned to any car
         else if (assignments.cars) {
@@ -1061,6 +1070,15 @@ const CouchNavigator = () => {
             // Save to localStorage
             localStorage.setItem('selectedCar', String(assignedCarNumber));
             localStorage.setItem('viewMode', 'navigator');
+
+            // Upload FCM token after role confirmation (only once)
+            if (isNativeApp && !fcmTokenUploadedRef.current) {
+              fcmTokenUploadedRef.current = true;
+              savePendingFCMToken(userId).catch(error => {
+                console.error('❌ Failed to upload FCM token:', error);
+                fcmTokenUploadedRef.current = false; // Allow retry on next assignment check
+              });
+            }
           } else {
             console.log('❌ User is NOT assigned to any role');
             setUserAssignment({ type: 'unassigned' });
