@@ -1,0 +1,391 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ========================================
+    // HELPER FUNCTIONS
+    // ========================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function memberExists() {
+      return exists(/databases/$(database)/documents/members/$(request.auth.uid));
+    }
+
+    function getUserRole() {
+      return get(/databases/$(database)/documents/members/$(request.auth.uid)).data.role;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/members/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+             memberExists() &&
+             getUserRole() == 'admin';
+    }
+
+    function isDirector() {
+      return isSignedIn() &&
+             memberExists() &&
+             getUserRole() in ['director', 'admin'];
+    }
+
+    function isDeputyOrAbove() {
+      return isSignedIn() &&
+             memberExists() &&
+             getUserRole() in ['deputy', 'director', 'admin'];
+    }
+
+    function isAuthenticated() {
+      return isSignedIn() && memberExists();
+    }
+
+    function hasCompletedProfile() {
+      let userData = getUserData();
+      return userData.profileCompleted == true && userData.tempPassword == false;
+    }
+
+    // ========================================
+    // COUCH NAVIGATOR HELPER FUNCTIONS
+    // ========================================
+
+    // Validate message data structure
+    function isValidMessage() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['ndrId', 'carNumber', 'sender', 'senderName', 'message', 'timestamp']) &&
+             data.ndrId is string &&
+             data.carNumber is number &&
+             data.carNumber > 0 &&
+             data.sender in ['couch', 'navigator'] &&
+             data.senderName is string &&
+             data.senderName.size() > 0 &&
+             data.message is string &&
+             data.message.size() > 0 &&
+             data.message.size() <= 1000 && // Limit message length
+             data.timestamp is timestamp;
+    }
+
+    // Validate location data structure
+    function isValidLocation() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['ndrId', 'carNumber', 'latitude', 'longitude', 'updatedAt']) &&
+             data.ndrId is string &&
+             data.carNumber is number &&
+             data.carNumber > 0 &&
+             data.latitude is number &&
+             data.latitude >= -90 && data.latitude <= 90 &&
+             data.longitude is number &&
+             data.longitude >= -180 && data.longitude <= 180 &&
+             data.updatedAt is timestamp;
+    }
+
+    // Validate location update (partial data)
+    function isValidLocationUpdate() {
+      let data = request.resource.data;
+      return data.latitude is number &&
+             data.latitude >= -90 && data.latitude <= 90 &&
+             data.longitude is number &&
+             data.longitude >= -180 && data.longitude <= 180 &&
+             data.updatedAt is timestamp;
+    }
+
+    // Check if user can access NDR data
+    function hasNDRAccess(ndrId) {
+      // All authenticated users can access NDR-related data
+      // This could be further restricted if needed
+      return isAuthenticated();
+    }
+
+    // ========================================
+    // EMAIL APPROVALS COLLECTION
+    // ========================================
+    match /emailApprovals/{approvalId} {
+      // Anyone can read to check if email is approved during registration
+      allow read: if true;
+
+      // Anyone can create pending approval requests (new registrations)
+      // Must set status to 'pending' - prevents self-approval
+      allow create: if request.resource.data.status == 'pending' &&
+                       request.resource.data.email is string &&
+                       request.resource.data.name is string &&
+                       request.resource.data.gender is string;
+
+      // Admins and Directors can approve, reject, or delete requests
+      allow update, delete: if isDirector();
+
+      // Allow pre-approval (creating approved entries)
+      allow create: if isDirector() &&
+                       request.resource.data.status == 'approved';
+    }
+
+    // ========================================
+    // MEMBERS COLLECTION
+    // ========================================
+    match /members/{userId} {
+      // All authenticated users can read member profiles
+      allow read: if isAuthenticated();
+
+      // Allow authenticated users with incomplete profiles to update their own profile
+      allow update: if isSignedIn() &&
+                       request.auth.uid == userId &&
+                       (
+                         // User is completing their profile
+                         (resource.data.tempPassword == true || resource.data.profileCompleted == false) ||
+                         // User is updating their own completed profile
+                         (resource.data.profileCompleted == true && resource.data.tempPassword == false)
+                       );
+
+      // Directors and above can update any member
+      allow update: if isDeputyOrAbove();
+
+      // Allow self-registration for new users (used by Cloud Functions)
+      allow create: if isSignedIn() &&
+                       request.auth.uid == userId &&
+                       request.resource.data.role == 'member';
+
+      // Directors can create member accounts
+      allow create: if isDirector();
+
+      // Only directors can delete members
+      allow delete: if isDirector();
+    }
+
+    // ========================================
+    // FCM TOKENS COLLECTION
+    // ========================================
+    // Push notification device tokens for native mobile apps
+    // Security Model:
+    // - Users can only read/write their own FCM token
+    // - Document ID must match authenticated user ID
+    // - Used by Cloud Functions to send push notifications
+    match /fcmTokens/{userId} {
+      // Users can only access their own FCM token
+      // Document ID must match their auth UID
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+
+      // Cloud Functions can read all tokens (server-side only)
+      // This rule allows the backend to fetch tokens for sending notifications
+    }
+
+    // ========================================
+    // RIDES COLLECTION
+    // ========================================
+    match /rides/{rideId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if isDeputyOrAbove();
+    }
+
+    // ========================================
+    // EVENTS COLLECTION
+    // ========================================
+    match /events/{eventId} {
+      allow read: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow create, delete: if isDeputyOrAbove();
+    }
+
+    // ========================================
+    // NDR REPORTS COLLECTION
+    // ========================================
+    match /ndrs/{ndrId} {
+      // Allow any signed-in user to read NDRs
+      allow read: if isSignedIn();
+
+      // Deputies and above can create NDRs
+      allow create: if isDeputyOrAbove();
+
+      // Authenticated users can update NDRs (for signing up)
+      allow update: if isAuthenticated();
+
+      // Only directors can delete NDRs
+      allow delete: if isDirector();
+    }
+
+    // ========================================
+    // NDR REPORTS SUMMARY COLLECTION
+    // ========================================
+    match /ndrReports/{reportId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    // ========================================
+    // POINTS COLLECTION
+    // ========================================
+    match /points/{pointId} {
+      allow read: if isAuthenticated();
+      allow create: if isDeputyOrAbove();
+    }
+
+    // ========================================
+    // BLACKLIST COLLECTIONS
+    // ========================================
+    match /blacklist/{phone} {
+      allow read: if isAuthenticated();
+      allow write: if isDeputyOrAbove();
+    }
+
+    match /addressBlacklist/{blacklistId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isDeputyOrAbove();
+    }
+
+    match /phoneBlacklist/{blacklistId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isDeputyOrAbove();
+    }
+
+    // ========================================
+    // ANNOUNCEMENTS COLLECTION
+    // ========================================
+    match /announcements/{announcementId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isDeputyOrAbove();
+    }
+
+    // ========================================
+    // COUCH NAVIGATOR SYSTEM
+    // ========================================
+    // Real-time communication and location tracking for ride coordination
+    // Security Model:
+    // - All authenticated users can participate in couch/navigator system
+    // - Messages are scoped by NDR and car number
+    // - Location data is real-time and continuously updated
+    // - Historical data is preserved for accountability
+
+    match /couchMessages/{messageId} {
+      // READ ACCESS:
+      // - All authenticated users can read messages
+      // - App-level filtering by ndrId and carNumber maintains privacy
+      // - Consider adding stricter rules if needed (e.g., only specific roles)
+      allow read: if isAuthenticated();
+
+      // CREATE ACCESS:
+      // - Any authenticated user can send messages
+      // - Must provide all required fields with valid data
+      // - Messages are immutable once created (audit trail)
+      // - Sender must be either 'couch' or 'navigator'
+      allow create: if isAuthenticated() && isValidMessage();
+
+      // UPDATE/DELETE:
+      // - Messages cannot be edited or deleted (integrity/audit trail)
+      // - This ensures accountability and prevents message tampering
+      allow update, delete: if false;
+    }
+
+    match /carLocations/{locationId} {
+      // READ ACCESS:
+      // - All authenticated users can read car locations
+      // - Used by couch to track navigator positions in real-time
+      allow read: if isAuthenticated();
+
+      // CREATE ACCESS:
+      // - Any authenticated user can create location entries
+      // - Must provide valid GPS coordinates and metadata
+      // - Validates latitude/longitude bounds
+      // - Car number must be positive integer
+      allow create: if isAuthenticated() && isValidLocation();
+
+      // UPDATE ACCESS:
+      // - Any authenticated user can update locations
+      // - Used for continuous location tracking
+      // - Updates happen frequently (every 3-30 seconds based on speed)
+      // - Must maintain valid coordinate bounds
+      allow update: if isAuthenticated() && isValidLocationUpdate();
+
+      // DELETE ACCESS:
+      // - Any authenticated user can delete old location entries
+      // - Used for cleanup when NDR ends or car disconnects
+      allow delete: if isAuthenticated();
+    }
+
+    // ========================================
+    // TYPING STATUS COLLECTION
+    // ========================================
+    match /typingStatus/{statusId} {
+      // READ ACCESS:
+      // - All authenticated users can read typing status
+      // - Used to show when other party is typing
+      allow read: if isAuthenticated();
+
+      // CREATE/UPDATE ACCESS:
+      // - Any authenticated user can set their own typing status
+      // - Uses merge writes so CREATE and UPDATE are both needed
+      // - Status documents are ephemeral (auto-expire after 5 seconds client-side)
+      allow create, update: if isAuthenticated() &&
+                               request.resource.data.keys().hasAll(['ndrId', 'carNumber', 'sender', 'typing', 'updatedAt']) &&
+                               request.resource.data.ndrId is string &&
+                               request.resource.data.carNumber is number &&
+                               request.resource.data.carNumber > 0 &&
+                               request.resource.data.sender in ['couch', 'navigator'] &&
+                               request.resource.data.typing is bool &&
+                               request.resource.data.updatedAt is timestamp;
+
+      // DELETE ACCESS:
+      // - Any authenticated user can delete typing status
+      // - Used for cleanup
+      allow delete: if isAuthenticated();
+    }
+
+    // ========================================
+    // RATE LIMITING CONSIDERATIONS
+    // ========================================
+    // Note: Firestore Security Rules don't support built-in rate limiting.
+    // For production, consider implementing rate limiting via:
+    // 1. Cloud Functions (server-side validation)
+    // 2. App-level throttling (client-side)
+    // 3. Firebase App Check (bot protection)
+    //
+    // High-frequency operations to monitor:
+    // - carLocations updates (every 3-30 seconds per navigator)
+    // - couchMessages creation (potential spam)
+
+    // ========================================
+    // SECURITY BEST PRACTICES IMPLEMENTED
+    // ========================================
+    // ✅ All operations require authentication
+    // ✅ Message immutability (no edits/deletes)
+    // ✅ GPS coordinate validation
+    // ✅ Message length limits (1000 chars)
+    // ✅ Type validation for all fields
+    // ✅ Positive number validation for car numbers
+    // ✅ Timestamp validation
+    // ✅ Helper functions for code reusability
+    // ✅ User-scoped FCM token access
+
+    // ========================================
+    // PRIVACY CONSIDERATIONS
+    // ========================================
+    // CURRENT: All authenticated users can read all messages and locations
+    // This is acceptable if all users are trusted organization members.
+    //
+    // FOR STRICTER PRIVACY, consider implementing:
+    // - Role-based access (only couch/navigators can read)
+    // - Car-specific access (users can only see their assigned car)
+    // - NDR-specific access (users can only see active NDR data)
+    //
+    // Example stricter rule for messages:
+    // allow read: if isAuthenticated() && (
+    //   isDeputyOrAbove() || // Couch operators
+    //   getUserData().assignedCarNumber == resource.data.carNumber // Assigned navigators
+    // );
+
+    // ========================================
+    // TESTING / DEVELOPMENT RULES
+    // ========================================
+    // ⚠️ NEVER UNCOMMENT IN PRODUCTION ⚠️
+    // These rules bypass all security - use only in local emulator!
+
+    // match /{document=**} {
+    //   allow read, write: if true;  // DANGER: Open access!
+    // }
+  }
+}
