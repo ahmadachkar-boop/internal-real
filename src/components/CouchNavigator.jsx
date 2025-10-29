@@ -220,6 +220,9 @@ const CouchNavigator = () => {
   const [firestoreConnected, setFirestoreConnectionState] = useState(true);
   const [queuedMessagesCount, setQueuedMessagesCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
+
+  // Map refresh trigger for tab visibility changes
+  const [mapRefreshTrigger, setMapRefreshTrigger] = useState(0);
   const [lastSyncTime, setLastSyncTime] = useState(null);
   const [showQueueManager, setShowQueueManager] = useState(false);
 
@@ -812,6 +815,52 @@ const CouchNavigator = () => {
     };
   }, [selectedCar, locationEnabled]);
 
+  // Handle map refresh on tab visibility change
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden && mapRef.current && window.google?.maps) {
+        console.log('📱 Tab visible - refreshing map');
+
+        // Small delay to ensure tab is fully active
+        setTimeout(() => {
+          try {
+            // Trigger Google Maps resize event
+            window.google.maps.event.trigger(mapRef.current, 'resize');
+
+            // Re-center map if we have appropriate data
+            if (selectedCar && carLocations[selectedCar]) {
+              const loc = carLocations[selectedCar];
+              mapRef.current.setCenter({ lat: loc.latitude, lng: loc.longitude });
+              console.log('✅ Map recentered to car location');
+            } else if (activeRides.length > 0 && activeRides[0].pickup) {
+              // Center on first active ride pickup if no car location
+              const geocoder = new window.google.maps.Geocoder();
+              geocoder.geocode({ address: activeRides[0].pickup }, (results, status) => {
+                if (status === 'OK' && results[0]) {
+                  mapRef.current.setCenter(results[0].geometry.location);
+                  console.log('✅ Map recentered to ride pickup');
+                }
+              });
+            }
+
+            console.log('✅ Map refreshed after tab visibility change');
+
+            // Trigger re-render of markers, routes, and history trails
+            setMapRefreshTrigger(prev => prev + 1);
+          } catch (error) {
+            console.error('❌ Error refreshing map on visibility change:', error);
+          }
+        }, 100);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [selectedCar, carLocations, activeRides]);
+
   // SEPARATE: Handle route rendering independently from markers
   useEffect(() => {
     // Ensure map and Google Maps are ready
@@ -836,13 +885,15 @@ const CouchNavigator = () => {
 
     const routeKey = `${ride.pickup}-${ride.dropoffs.join('-')}-${ride.id}`;
     const isNewRoute = lastRenderedRouteRef.current !== routeKey;
+    const routeExists = directionsRendererRef.current && directionsRendererRef.current.getMap();
 
-    if (isNewRoute) {
-      routeLogger.log('🛣️ Rendering new route for ride:', ride.id);
+    // Re-render if: new route OR route doesn't exist on map (e.g., after tab switch)
+    if (isNewRoute || !routeExists) {
+      routeLogger.log('🛣️ Rendering route for ride:', ride.id, isNewRoute ? '(new)' : '(refresh)');
       renderRoute(ride.pickup, ride.dropoffs, true);
       lastRenderedRouteRef.current = routeKey;
     }
-  }, [activeRides, selectedCar, viewMode, googleMapsLoaded]);
+  }, [activeRides, selectedCar, viewMode, googleMapsLoaded, mapRefreshTrigger]);
 
   // MODIFIED: Update markers smoothly without recreating
   useEffect(() => {
@@ -1055,7 +1106,7 @@ const CouchNavigator = () => {
     }
 
     markersLogger.log('✅ Total markers now:', Object.keys(markersRef.current).length);
-  }, [carLocations, googleMapsLoaded, googleMapsMarkerReady, selectedCar, viewMode]);
+  }, [carLocations, googleMapsLoaded, googleMapsMarkerReady, selectedCar, viewMode, mapRefreshTrigger]);
 
   // Save state to localStorage when it changes
   useEffect(() => {
@@ -1327,7 +1378,7 @@ const CouchNavigator = () => {
         console.log(`⏭️ Skipping ride ${ride.id} - no car assigned yet`);
       }
     });
-  }, [carLocations, activeRides]);
+  }, [carLocations, activeRides, mapRefreshTrigger]);
 
   // Clear history when rides complete
   useEffect(() => {
