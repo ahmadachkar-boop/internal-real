@@ -390,6 +390,7 @@ const CouchNavigator = () => {
             offset: '0',
             repeat: '10px'
           }],
+          zIndex: 50, // Below route (100) and markers (1000)
           map: mapRef.current
         });
 
@@ -420,7 +421,8 @@ const CouchNavigator = () => {
       polylineOptions: {
         strokeColor: '#4285F4',
         strokeWeight: 5,
-        strokeOpacity: 0.7
+        strokeOpacity: 0.7,
+        zIndex: 100 // Lower than markers (which are at 1000)
       }
     });
 
@@ -475,6 +477,16 @@ const CouchNavigator = () => {
           bounds.extend(leg.start_location);
           bounds.extend(leg.end_location);
         });
+
+        // Also include car location in bounds if available
+        if (selectedCar && carLocations[selectedCar]) {
+          const carLoc = carLocations[selectedCar];
+          if (carLoc.latitude && carLoc.longitude) {
+            bounds.extend({ lat: carLoc.latitude, lng: carLoc.longitude });
+            routeLogger.log('📍 Including car location in bounds');
+          }
+        }
+
         mapRef.current.fitBounds(bounds);
       }
     } catch (error) {
@@ -792,6 +804,11 @@ const CouchNavigator = () => {
 
   // SEPARATE: Handle route rendering independently from markers
   useEffect(() => {
+    // Ensure map and Google Maps are ready
+    if (!mapRef.current || !googleMapsLoaded || !window.google) {
+      return;
+    }
+
     if (activeRides.length === 0) {
       clearRoute();
       return;
@@ -815,7 +832,7 @@ const CouchNavigator = () => {
       renderRoute(ride.pickup, ride.dropoffs, true);
       lastRenderedRouteRef.current = routeKey;
     }
-  }, [activeRides, selectedCar, viewMode]);
+  }, [activeRides, selectedCar, viewMode, googleMapsLoaded]);
 
   // MODIFIED: Update markers smoothly without recreating
   useEffect(() => {
@@ -867,7 +884,8 @@ const CouchNavigator = () => {
                 color: '#ffffff',
                 fontSize: '14px',
                 fontWeight: 'bold'
-              }
+              },
+              zIndex: 1000 // Ensure marker appears above routes
             });
 
             markersRef.current[selectedCar] = marker;
@@ -940,7 +958,8 @@ const CouchNavigator = () => {
                 color: '#ffffff',
                 fontSize: '14px',
                 fontWeight: 'bold'
-              }
+              },
+              zIndex: 1000 // Ensure marker appears above routes
             });
 
             markersRef.current[selectedCar] = marker;
@@ -1012,7 +1031,8 @@ const CouchNavigator = () => {
                 color: '#ffffff',
                 fontSize: '12px',
                 fontWeight: 'bold'
-              }
+              },
+              zIndex: 1000 // Ensure marker appears above routes
             });
 
             markersRef.current[actualCarNumber] = marker;
