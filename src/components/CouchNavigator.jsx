@@ -241,6 +241,8 @@ const CouchNavigator = () => {
   const initialMapCenterRef = useRef(null);
   const isMountedRef = useRef(true); // Track component mount status
   const lastNotifiedMessageIdRef = useRef(null); // Track last notified message to prevent duplicates
+  const historyPolylinesRef = useRef({}); // Track history polylines per ride
+  const carLocationHistoryRef = useRef({}); // Track location history per ride
 
   const [platformInfo, setPlatformInfo] = useState({
     isIOS: false,
@@ -328,6 +330,73 @@ const CouchNavigator = () => {
     }
     setRouteInfo(null);
     lastRenderedRouteRef.current = null;
+  };
+
+  // Clear history polyline for a specific ride
+  const clearHistoryPolyline = (rideId) => {
+    if (historyPolylinesRef.current[rideId]) {
+      historyPolylinesRef.current[rideId].setMap(null);
+      delete historyPolylinesRef.current[rideId];
+      delete carLocationHistoryRef.current[rideId];
+    }
+  };
+
+  // Clear all history polylines
+  const clearAllHistoryPolylines = () => {
+    Object.keys(historyPolylinesRef.current).forEach(rideId => {
+      clearHistoryPolyline(rideId);
+    });
+  };
+
+  // Update or create history polyline for a ride
+  const updateHistoryPolyline = (rideId, carNumber, newLocation) => {
+    if (!mapRef.current || !googleMapsLoaded || !window.google) return;
+
+    // Initialize history for this ride if it doesn't exist
+    if (!carLocationHistoryRef.current[rideId]) {
+      carLocationHistoryRef.current[rideId] = [];
+    }
+
+    const history = carLocationHistoryRef.current[rideId];
+    const latLng = { lat: newLocation.latitude, lng: newLocation.longitude };
+
+    // Only add if it's a new location (avoid duplicates)
+    const lastPoint = history[history.length - 1];
+    if (!lastPoint || lastPoint.lat !== latLng.lat || lastPoint.lng !== latLng.lng) {
+      history.push(latLng);
+
+      // Keep only last 100 points to avoid performance issues
+      if (history.length > 100) {
+        history.shift();
+      }
+
+      // Update or create polyline
+      if (historyPolylinesRef.current[rideId]) {
+        historyPolylinesRef.current[rideId].setPath(history);
+      } else if (history.length > 1) {
+        // Create new polyline only if we have at least 2 points
+        const polyline = new window.google.maps.Polyline({
+          path: history,
+          geodesic: true,
+          strokeColor: '#EF4444', // Red color
+          strokeOpacity: 0.6,
+          strokeWeight: 3,
+          icons: [{
+            icon: {
+              path: 'M 0,-1 0,1',
+              strokeOpacity: 1,
+              scale: 2
+            },
+            offset: '0',
+            repeat: '10px'
+          }],
+          map: mapRef.current
+        });
+
+        historyPolylinesRef.current[rideId] = polyline;
+        console.log(`🔴 Created history trail for ride ${rideId} (${history.length} points)`);
+      }
+    }
   };
 
   const renderRoute = async (pickup, dropoffs, shouldFitBounds = false) => {
@@ -723,7 +792,14 @@ const CouchNavigator = () => {
 
   // SEPARATE: Handle route rendering independently from markers
   useEffect(() => {
-    if (!selectedCar || activeRides.length === 0) {
+    if (activeRides.length === 0) {
+      clearRoute();
+      return;
+    }
+
+    // In couch view, render routes for all active rides (or first one for simplicity)
+    // In navigator view, only render if we have a selected car
+    if (viewMode === 'navigator' && !selectedCar) {
       clearRoute();
       return;
     }
@@ -731,15 +807,15 @@ const CouchNavigator = () => {
     const ride = activeRides[0];
     if (!ride.pickup || !ride.dropoffs) return;
 
-    const routeKey = `${ride.pickup}-${ride.dropoffs.join('-')}`;
+    const routeKey = `${ride.pickup}-${ride.dropoffs.join('-')}-${ride.id}`;
     const isNewRoute = lastRenderedRouteRef.current !== routeKey;
-    
+
     if (isNewRoute) {
-      routeLogger.log('🛣️ Rendering new route');
+      routeLogger.log('🛣️ Rendering new route for ride:', ride.id);
       renderRoute(ride.pickup, ride.dropoffs, true);
       lastRenderedRouteRef.current = routeKey;
     }
-  }, [activeRides, selectedCar]);
+  }, [activeRides, selectedCar, viewMode]);
 
   // MODIFIED: Update markers smoothly without recreating
   useEffect(() => {
@@ -1188,6 +1264,40 @@ const CouchNavigator = () => {
     return () => unsubscribe();
   }, [activeNDR, viewMode, selectedCar]);
 
+  // Track car location history for active rides
+  useEffect(() => {
+    if (!activeRides.length || !Object.keys(carLocations).length) return;
+
+    // Update history for each active ride's car
+    activeRides.forEach(ride => {
+      if (ride.status === 'active' && ride.carNumber) {
+        const carNum = ride.carNumber;
+        const location = carLocations[carNum];
+
+        if (location && location.latitude && location.longitude) {
+          updateHistoryPolyline(ride.id, carNum, location);
+        }
+      }
+    });
+  }, [carLocations, activeRides]);
+
+  // Clear history when rides complete
+  useEffect(() => {
+    if (!activeRides.length) {
+      // No active rides, clear all history
+      clearAllHistoryPolylines();
+    } else {
+      // Check if any tracked rides are no longer active
+      const activeRideIds = activeRides.map(r => r.id);
+      Object.keys(historyPolylinesRef.current).forEach(rideId => {
+        if (!activeRideIds.includes(rideId)) {
+          console.log(`🧹 Clearing history for completed ride ${rideId}`);
+          clearHistoryPolyline(rideId);
+        }
+      });
+    }
+  }, [activeRides]);
+
   useEffect(() => {
     if (!activeNDR || !selectedCar) {
       messagesLogger.log('Message listener not active');
@@ -1341,6 +1451,13 @@ const CouchNavigator = () => {
         collection(db, 'rides'),
         where('ndrId', '==', activeNDR.id),
         where('carNumber', '==', parseInt(selectedCar, 10)),
+        where('status', 'in', ['active', 'pending'])
+      );
+    } else if (viewMode === 'couch' && !selectedCar) {
+      // Couch view without selected car - show ALL active/pending rides
+      ridesQuery = query(
+        collection(db, 'rides'),
+        where('ndrId', '==', activeNDR.id),
         where('status', 'in', ['active', 'pending'])
       );
     } else if (viewMode === 'navigator' && selectedCar) {
