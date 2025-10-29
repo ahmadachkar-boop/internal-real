@@ -19,7 +19,7 @@ import { requestNotificationPermission, showNotification, playNotificationSound,
 import { queueMessage, getMessageQueue, removeQueuedMessage, cacheLocation, getCachedLocation, addConnectionListener, isConnected, addFirestoreConnectionListener, setFirestoreConnected, getSyncStatus, syncQueuedMessages, isSyncInProgress, setSyncCallback, addAppResumeListener } from '../offlineUtils';
 import { hapticLight, hapticSuccess, hapticNewMessage, hapticMessageSent, hapticLocationEnabled, hapticError } from '../hapticUtils';
 import { markMessageDelivered, markMessageRead, handleTypingIndicator, listenToTypingStatus, getMessageStatusDisplay } from '../messageStatusUtils';
-import { initializeFCM, requestFCMToken, setupForegroundMessageListener, initializeNativePushNotifications, cleanupNativePushNotifications } from '../fcmUtils';
+import { initializeFCM, requestFCMToken, setupForegroundMessageListener, initializeNativePushNotifications, cleanupNativePushNotifications, savePendingFCMToken } from '../fcmUtils';
 import QueueManager from './QueueManager';
 import { Capacitor } from '@capacitor/core';
 import { navigationLogger, messagesLogger, markersLogger, etaLogger, routeLogger, locationLogger } from '../logger';
@@ -529,9 +529,9 @@ const CouchNavigator = () => {
 
       try {
         if (isNativeApp) {
-          // Initialize native push notifications (iOS/Android with APNs/FCM)
-          await initializeNativePushNotifications(userProfile.uid);
-          console.log('✅ Native push notifications initialized');
+          // Save any pending FCM token that was captured on app startup
+          await savePendingFCMToken(userProfile.uid);
+          console.log('✅ Native push notifications initialized and token saved');
         } else {
           // Initialize web FCM
           try {
