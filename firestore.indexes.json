@@ -1,0 +1,19 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "couchMessages",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "ndrId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "timestamp",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
