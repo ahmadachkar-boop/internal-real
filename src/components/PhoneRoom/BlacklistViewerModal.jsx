@@ -8,16 +8,16 @@ import { Shield, X, MapPin, Phone } from 'lucide-react';
  * Shows both permanent blacklists and temporary ones for the active event.
  * Displays addresses and phone numbers in separate tabs.
  *
- * @param {boolean} showBlacklistViewer - Whether the modal is visible
- * @param {function} setShowBlacklistViewer - Function to toggle modal visibility
+ * @param {boolean} isOpen - Whether the modal is visible
+ * @param {function} onClose - Function to close the modal
  * @param {object} activeNDR - The currently active NDR event
  * @param {array} blacklistedAddresses - List of all blacklisted addresses
  * @param {array} blacklistedPhones - List of all blacklisted phone numbers
  * @param {function} getActiveBlacklists - Function to filter blacklists for active event
  */
 const BlacklistViewerModal = ({
-  showBlacklistViewer,
-  setShowBlacklistViewer,
+  isOpen,
+  onClose,
   activeNDR,
   blacklistedAddresses,
   blacklistedPhones,
@@ -25,7 +25,7 @@ const BlacklistViewerModal = ({
 }) => {
   const [viewerTab, setViewerTab] = useState('addresses');
 
-  if (!showBlacklistViewer) return null;
+  if (!isOpen) return null;
 
   // Filter and get active blacklists
   const activeAddresses = activeNDR ? getActiveBlacklists(blacklistedAddresses, 'address').filter(a => a.status === 'approved') : [];
@@ -47,7 +47,7 @@ const BlacklistViewerModal = ({
               </div>
             </div>
             <button
-              onClick={() => setShowBlacklistViewer(false)}
+              onClick={onClose}
               className="text-white hover:bg-white/20 rounded-lg p-2 transition"
             >
               <X size={24} />

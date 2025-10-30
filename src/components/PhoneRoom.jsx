@@ -72,8 +72,7 @@ const PhoneRoom = () => {
   const {
     blacklistedAddresses,
     blacklistedPhones,
-    getActiveBlacklists,
-    checkBlacklist
+    getActiveBlacklists
   } = useBlacklist(activeNDR);
 
   useEffect(() => {

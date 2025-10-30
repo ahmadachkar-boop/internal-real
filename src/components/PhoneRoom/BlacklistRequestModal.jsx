@@ -11,20 +11,20 @@ import AddressAutocomplete from './AddressAutocomplete';
  * Supports both temporary (event-specific) and permanent blacklists.
  * All requests require director approval before becoming active.
  *
- * @param {boolean} showBlacklistModal - Whether the modal is visible
- * @param {function} setShowBlacklistModal - Function to toggle modal visibility
+ * @param {boolean} isOpen - Whether the modal is visible
+ * @param {function} onClose - Function to close the modal
  * @param {object} activeNDR - The currently active NDR event
- * @param {array} blacklistedAddresses - Current list of blacklisted addresses (unused in modal, but kept for consistency)
  * @param {object} currentUser - The currently logged-in user
- * @param {function} fetchAddressSuggestions - Function to fetch address autocomplete suggestions
+ * @param {function} formatPhoneNumber - Function to format phone numbers
+ * @param {boolean} isLoaded - Whether Google Maps is loaded
  */
 const BlacklistRequestModal = ({
-  showBlacklistModal,
-  setShowBlacklistModal,
+  isOpen,
+  onClose,
   activeNDR,
-  blacklistedAddresses,
   currentUser,
-  fetchAddressSuggestions
+  formatPhoneNumber: externalFormatPhoneNumber,
+  isLoaded
 }) => {
   // Form state
   const [blacklistRequest, setBlacklistRequest] = useState({
@@ -46,8 +46,8 @@ const BlacklistRequestModal = ({
   const [showBlacklistSuggestions, setShowBlacklistSuggestions] = useState(false);
   const blacklistAddressRef = useRef(null);
 
-  // Phone number formatter
-  const formatPhoneNumber = (value) => {
+  // Use external formatPhoneNumber or fallback to internal
+  const formatPhoneNumber = externalFormatPhoneNumber || ((value) => {
     const cleaned = value.replace(/\D/g, '');
     const limited = cleaned.slice(0, 10);
 
@@ -58,6 +58,57 @@ const BlacklistRequestModal = ({
     } else {
       return `(${limited.slice(0, 3)}) ${limited.slice(3, 6)}-${limited.slice(6)}`;
     }
+  });
+
+  // Google Maps autocomplete reference
+  const autocompleteService = useRef(null);
+
+  // Initialize Google Maps autocomplete
+  useEffect(() => {
+    if (isLoaded && window.google) {
+      autocompleteService.current = new window.google.maps.places.AutocompleteService();
+    }
+  }, [isLoaded]);
+
+  // BCS constants for address validation
+  const BCS_CENTER = { lat: 30.6280, lng: -96.3344 };
+  const VALID_ZIP_CODES = ['77801', '77802', '77803', '77807', '77808', '77840', '77841', '77842', '77843', '77844', '77845'];
+  const VALID_CITIES = ['bryan', 'college station', 'college-station'];
+
+  // Fetch address suggestions using Google Maps API
+  const fetchAddressSuggestions = (input, callback) => {
+    if (!input || input.length < 3) {
+      callback([]);
+      return;
+    }
+
+    if (!isLoaded || !autocompleteService.current) {
+      callback([]);
+      return;
+    }
+
+    autocompleteService.current.getPlacePredictions(
+      {
+        input,
+        location: new window.google.maps.LatLng(BCS_CENTER.lat, BCS_CENTER.lng),
+        radius: 20000,
+        componentRestrictions: { country: 'us' }
+      },
+      (predictions, status) => {
+        if (status === window.google.maps.places.PlacesServiceStatus.OK && predictions) {
+          const filteredPredictions = predictions
+            .map(p => p.description)
+            .filter(desc => {
+              const lower = desc.toLowerCase();
+              return VALID_ZIP_CODES.some(zip => lower.includes(zip)) ||
+                     VALID_CITIES.some(city => lower.includes(city));
+            });
+          callback(filteredPredictions);
+        } else {
+          callback([]);
+        }
+      }
+    );
   };
 
   // Handle address value changes and fetch suggestions
@@ -162,7 +213,7 @@ const BlacklistRequestModal = ({
           appliesToPickup: true,
           appliesToDropoff: true
         });
-        setShowBlacklistModal(false);
+        onClose();
         setBlacklistMessage('');
         setBlacklistMessageType('');
       }, 2000);
@@ -175,7 +226,7 @@ const BlacklistRequestModal = ({
     }
   };
 
-  if (!showBlacklistModal) return null;
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -193,7 +244,7 @@ const BlacklistRequestModal = ({
               </div>
             </div>
             <button
-              onClick={() => setShowBlacklistModal(false)}
+              onClick={onClose}
               className="text-white hover:bg-white/20 rounded-lg p-2 transition"
             >
               <X size={24} />
