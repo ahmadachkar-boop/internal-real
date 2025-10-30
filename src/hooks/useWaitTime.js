@@ -10,6 +10,35 @@ const devError = (...args) => {
   if (isDev) console.error(...args);
 };
 
+// Cache for wait time calculations (expires after 2 minutes)
+const waitTimeCache = new Map();
+const CACHE_DURATION = 120000; // 2 minutes
+
+const getCachedWaitTime = (pickup) => {
+  const cached = waitTimeCache.get(pickup);
+  if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+    devLog('✅ Using cached wait time for', pickup);
+    return cached.data;
+  }
+  return null;
+};
+
+const setCachedWaitTime = (pickup, data) => {
+  waitTimeCache.set(pickup, {
+    data,
+    timestamp: Date.now()
+  });
+
+  // Cleanup old entries
+  if (waitTimeCache.size > 50) {
+    const entries = Array.from(waitTimeCache.entries());
+    const oldEntries = entries
+      .filter(([_, v]) => Date.now() - v.timestamp > CACHE_DURATION)
+      .map(([k]) => k);
+    oldEntries.forEach(k => waitTimeCache.delete(k));
+  }
+};
+
 /**
  * Custom hook to calculate estimated wait time using real routing with full queue simulation
  * Simulates the entire pending ride queue to calculate accurate ETAs
@@ -22,6 +51,13 @@ export const useWaitTime = (activeNDR, pickup, isLoaded) => {
     const calculateWaitTime = async () => {
       if (!activeNDR || !pickup) {
         setEstimatedWaitTime(null);
+        return;
+      }
+
+      // CHECK CACHE FIRST
+      const cached = getCachedWaitTime(pickup);
+      if (cached) {
+        setEstimatedWaitTime(cached);
         return;
       }
 
@@ -43,7 +79,7 @@ export const useWaitTime = (activeNDR, pickup, isLoaded) => {
           const availableCars = activeNDR.availableCars || 0;
           const avgWait = 15 + (pendingCount * 3);
 
-          setEstimatedWaitTime({
+          const result = {
             min: Math.max(10, avgWait - 5),
             max: avgWait + 10,
             pendingCount,
@@ -51,7 +87,11 @@ export const useWaitTime = (activeNDR, pickup, isLoaded) => {
             freeCars: 0,
             fallback: true,
             reason: 'Google Maps unavailable'
-          });
+          };
+
+          // CACHE THE RESULT
+          setCachedWaitTime(pickup, result);
+          setEstimatedWaitTime(result);
         } catch (error) {
           devError('Error in fallback calculation:', error);
           setEstimatedWaitTime({
@@ -117,6 +157,13 @@ export const useWaitTime = (activeNDR, pickup, isLoaded) => {
         }));
 
         devLog(`🚗 Simulating queue: ${pendingCount} pending rides, ${availableCars} cars`);
+
+        // Limit to first 10 rides for calculation (reduce API calls)
+        const ridesToSimulate = pendingRides.slice(0, 10);
+        const remainingRides = Math.max(0, pendingRides.length - 10);
+        const extraWaitTime = remainingRides * 5; // 5 min per extra ride
+
+        devLog(`📊 Calculating for ${ridesToSimulate.length} rides, estimating ${remainingRides} remaining`);
 
         // Helper function to route a full ride
         const routeFullRide = async (origin, ride) => {
@@ -267,15 +314,15 @@ export const useWaitTime = (activeNDR, pickup, isLoaded) => {
 
         devLog('📊 Initial car availability:', carTimeline);
 
-        // STEP 2: Simulate dispatching ALL pending rides in queue order
-        for (let i = 0; i < pendingRides.length; i++) {
-          const ride = pendingRides[i];
+        // STEP 2: Simulate dispatching rides in queue order (limited to first 10)
+        for (let i = 0; i < ridesToSimulate.length; i++) {
+          const ride = ridesToSimulate[i];
 
           // Find the car that will be available soonest
           carTimeline.sort((a, b) => a.availableAt - b.availableAt);
           const nextCar = carTimeline[0];
 
-          devLog(`📋 Queue ${i + 1}/${pendingCount}: Assigning to Car ${nextCar.carNumber} (available in ${nextCar.availableAt} min)`);
+          devLog(`📋 Queue ${i + 1}/${ridesToSimulate.length}: Assigning to Car ${nextCar.carNumber} (available in ${nextCar.availableAt} min)`);
 
           // Calculate route from car's next location to this ride
           const origin = nextCar.currentLocation || pickup; // Fallback if no location
@@ -286,6 +333,10 @@ export const useWaitTime = (activeNDR, pickup, isLoaded) => {
           nextCar.currentLocation = rideResult.finalLocation;
 
           devLog(`  → Ride takes ${rideResult.minutes} min, car available again at ${nextCar.availableAt} min`);
+        }
+
+        if (remainingRides > 0) {
+          devLog(`⏩ Estimating ${extraWaitTime} minutes for ${remainingRides} remaining rides`);
         }
 
         devLog('📊 After processing queue:', carTimeline);
@@ -338,13 +389,14 @@ export const useWaitTime = (activeNDR, pickup, isLoaded) => {
           finalCarTimeline.sort((a, b) => a.availableInMinutes - b.availableInMinutes);
           const fastestCar = finalCarTimeline[0];
 
-          const estimatedMinutes = fastestCar.availableInMinutes;
+          // Add extra wait time for rides not simulated
+          const estimatedMinutes = fastestCar.availableInMinutes + extraWaitTime;
           const minWait = Math.max(5, estimatedMinutes - 3);
           const maxWait = estimatedMinutes + 5;
 
           devLog(`✅ Final result: Car ${fastestCar.carNumber} arrives in ${estimatedMinutes} min (${minWait}-${maxWait} min range)`);
 
-          setEstimatedWaitTime({
+          const result = {
             min: minWait,
             max: maxWait,
             pendingCount,
@@ -353,16 +405,22 @@ export const useWaitTime = (activeNDR, pickup, isLoaded) => {
             fastestCar: fastestCar.carNumber,
             usingRealRouting: true,
             queueSimulated: true
-          });
+          };
+
+          // CACHE THE RESULT
+          setCachedWaitTime(pickup, result);
+          setEstimatedWaitTime(result);
         } else {
           // Fallback if no cars
-          setEstimatedWaitTime({
+          const result = {
             min: 15,
             max: 25,
             pendingCount,
             availableCars,
             freeCars: 0
-          });
+          };
+          setCachedWaitTime(pickup, result);
+          setEstimatedWaitTime(result);
         }
       } catch (error) {
         devError('Error calculating wait time:', error);
@@ -403,8 +461,16 @@ export const useWaitTime = (activeNDR, pickup, isLoaded) => {
       }
     };
 
+    // Debounce initial calculation
     const debounce = setTimeout(calculateWaitTime, 1500);
-    return () => clearTimeout(debounce);
+
+    // Refresh every 2 minutes
+    const interval = setInterval(calculateWaitTime, 120000);
+
+    return () => {
+      clearTimeout(debounce);
+      clearInterval(interval);
+    };
   }, [pickup, activeNDR, isLoaded]);
 
   return { estimatedWaitTime, calculatingWait };

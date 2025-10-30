@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { collection, addDoc, query, where, getDocs, updateDoc, doc, Timestamp, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, updateDoc, doc, Timestamp, deleteDoc, setDoc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import {
   isNativeApp,
@@ -13,6 +13,36 @@ import {
 import { cacheLocation, getCachedLocation } from '../offlineUtils';
 import { hapticLocationEnabled } from '../hapticUtils';
 import { locationLogger } from '../logger';
+
+// Debouncer helper for batching location updates
+const createDebouncer = (delay) => {
+  let timeoutId;
+  let pendingUpdate = null;
+
+  return {
+    debounce: (fn) => {
+      pendingUpdate = fn;
+
+      if (!timeoutId) {
+        timeoutId = setTimeout(() => {
+          if (pendingUpdate) {
+            pendingUpdate();
+            pendingUpdate = null;
+          }
+          timeoutId = null;
+        }, delay);
+      }
+    },
+    flush: () => {
+      if (pendingUpdate) {
+        clearTimeout(timeoutId);
+        pendingUpdate();
+        pendingUpdate = null;
+        timeoutId = null;
+      }
+    }
+  };
+};
 
 /**
  * Custom hook for location tracking in navigator mode
@@ -36,6 +66,9 @@ export const useLocationTracking = (viewMode, selectedCar, activeNDR, platformIn
   const locationWatchId = useRef(null);
   const lastLocationRef = useRef(null);
   const locationUpdateTimerRef = useRef(null);
+  const locationDebouncer = useRef(createDebouncer(2000)); // 2 second debounce
+  const documentExists = useRef(false);
+  const lastUpdatePosition = useRef(null);
 
   // Calculate distance between two coordinates (Haversine formula)
   const calculateDistance = (lat1, lon1, lat2, lon2) => {
@@ -53,7 +86,7 @@ export const useLocationTracking = (viewMode, selectedCar, activeNDR, platformIn
     return R * c;
   };
 
-  // Update location to Firestore
+  // Update location to Firestore with debouncing
   const updateLocationToFirestore = async (position) => {
     if (!activeNDR || !selectedCar) {
       console.log('⏭️ Skipping location update');
@@ -64,10 +97,11 @@ export const useLocationTracking = (viewMode, selectedCar, activeNDR, platformIn
 
     console.log(`📍 Location: ${latitude.toFixed(6)}, ${longitude.toFixed(6)} (±${accuracy}m)`);
 
-    if (lastLocationRef.current && lastLocationRef.current.lastWriteSuccess) {
+    // Distance check (keep existing 30m logic)
+    if (lastUpdatePosition.current) {
       const distance = calculateDistance(
-        lastLocationRef.current.latitude,
-        lastLocationRef.current.longitude,
+        lastUpdatePosition.current.latitude,
+        lastUpdatePosition.current.longitude,
         latitude,
         longitude
       );
@@ -98,69 +132,69 @@ export const useLocationTracking = (viewMode, selectedCar, activeNDR, platformIn
       setUpdateInterval(newInterval);
     }
 
-    try {
-      const locationsRef = collection(db, 'carLocations');
-      const carNum = parseInt(selectedCar, 10);
+    // DEBOUNCE: Accumulate updates, flush every 2 seconds
+    locationDebouncer.current.debounce(async () => {
+      try {
+        const carNum = parseInt(selectedCar, 10);
+        const locationId = `${activeNDR.id}_${carNum}`;
+        const carLocationRef = doc(db, 'carLocations', locationId);
 
-      console.log(`💾 Updating Firestore for car ${carNum}...`);
+        console.log(`💾 Updating Firestore for car ${carNum}...`);
 
-      const existingQuery = query(
-        locationsRef,
-        where('ndrId', '==', activeNDR.id),
-        where('carNumber', '==', carNum)
-      );
+        // Check if document exists ONCE per session (not every time)
+        if (!documentExists.current) {
+          const existingDoc = await getDoc(carLocationRef);
+          documentExists.current = existingDoc.exists();
+        }
 
-      const existingDocs = await getDocs(existingQuery);
-
-      if (existingDocs.empty) {
-        await addDoc(locationsRef, {
+        const locationData = {
           ndrId: activeNDR.id,
           carNumber: carNum,
           latitude,
           longitude,
           accuracy,
           updatedAt: Timestamp.now()
-        });
-        console.log('✅ Location document created');
-      } else {
-        const docRef = doc(db, 'carLocations', existingDocs.docs[0].id);
-        await updateDoc(docRef, {
+        };
+
+        if (!documentExists.current) {
+          await setDoc(carLocationRef, locationData);
+          documentExists.current = true;
+          console.log('✅ Location document created');
+        } else {
+          await updateDoc(carLocationRef, locationData);
+          console.log('✅ Location updated in Firestore');
+        }
+
+        lastUpdatePosition.current = { latitude, longitude };
+        lastLocationRef.current = {
+          latitude,
+          longitude,
+          lastWriteSuccess: true
+        };
+
+        // Cache location for offline recovery
+        cacheLocation({
           latitude,
           longitude,
           accuracy,
-          updatedAt: Timestamp.now()
+          carNumber: carNum,
+          ndrId: activeNDR.id
         });
-        console.log('✅ Location updated in Firestore');
+
+        setLastLocationUpdate(new Date());
+        setLocationError('');
+
+      } catch (error) {
+        console.error('❌ Error updating location to Firestore:', error);
+
+        if (lastLocationRef.current) {
+          lastLocationRef.current.lastWriteSuccess = false;
+        }
+
+        setDebugStatus('⚠️ Firestore update failed - will retry');
+        setTimeout(() => setDebugStatus(''), 3000);
       }
-
-      lastLocationRef.current = {
-        latitude,
-        longitude,
-        lastWriteSuccess: true
-      };
-
-      // Cache location for offline recovery
-      cacheLocation({
-        latitude,
-        longitude,
-        accuracy,
-        carNumber: parseInt(selectedCar, 10),
-        ndrId: activeNDR.id
-      });
-
-      setLastLocationUpdate(new Date());
-      setLocationError('');
-
-    } catch (error) {
-      console.error('❌ Error updating location to Firestore:', error);
-
-      if (lastLocationRef.current) {
-        lastLocationRef.current.lastWriteSuccess = false;
-      }
-
-      setDebugStatus('⚠️ Firestore update failed - will retry');
-      setTimeout(() => setDebugStatus(''), 3000);
-    }
+    });
   };
 
   // Check location permission status

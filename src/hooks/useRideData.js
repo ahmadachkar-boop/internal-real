@@ -22,87 +22,56 @@ export const useRideData = (activeNDR) => {
     }
 
     const ridesRef = collection(db, 'rides');
-    let unsubPending, unsubActive, unsubCompleted;
 
-    // Pending rides query
-    const pendingQuery = query(ridesRef, where('status', '==', 'pending'), where('ndrId', '==', activeNDR.id));
-    unsubPending = onSnapshot(
-      pendingQuery,
-      (snapshot) => {
-        const pendingRides = snapshot.docs.map(doc => {
-          const data = doc.data();
-          return {
-            id: doc.id,
-            ...data,
-            requestedAt: data.requestedAt?.toDate() || new Date()
-          };
-        }).sort((a, b) => a.requestedAt - b.requestedAt);
-
-        setRides(prev => ({ ...prev, pending: pendingRides }));
-        setLoading(false);
-      },
-      (error) => {
-        logError('Pending Rides Query', error);
-        setLoading(false);
-      }
-    );
-
-    // Active rides query
-    const activeQuery = query(ridesRef, where('status', '==', 'active'), where('ndrId', '==', activeNDR.id));
-    unsubActive = onSnapshot(
-      activeQuery,
-      (snapshot) => {
-        const activeRides = snapshot.docs.map(doc => {
-          const data = doc.data();
-          return {
-            id: doc.id,
-            ...data,
-            requestedAt: data.requestedAt?.toDate() || new Date(),
-            assignedAt: data.assignedAt?.toDate() || null,
-            pickedUpAt: data.pickedUpAt?.toDate() || null
-          };
-        }).sort((a, b) => b.requestedAt - a.requestedAt);
-
-        setRides(prev => ({ ...prev, active: activeRides }));
-      },
-      (error) => {
-        logError('Active Rides Query', error);
-      }
-    );
-
-    // Completed rides query
-    const completedQuery = query(
+    // Single query for ALL statuses - let Firestore do the work
+    const allRidesQuery = query(
       ridesRef,
-      where('status', 'in', ['completed', 'cancelled', 'terminated']),
-      where('ndrId', '==', activeNDR.id)
+      where('ndrId', '==', activeNDR.id),
+      where('status', 'in', ['pending', 'active', 'completed', 'cancelled', 'terminated'])
     );
-    unsubCompleted = onSnapshot(
-      completedQuery,
+
+    const unsubscribe = onSnapshot(
+      allRidesQuery,
       (snapshot) => {
-        const completedRides = snapshot.docs.map(doc => {
+        const pending = [];
+        const active = [];
+        const completed = [];
+
+        snapshot.docs.forEach(doc => {
           const data = doc.data();
-          return {
+          const ride = {
             id: doc.id,
             ...data,
             requestedAt: data.requestedAt?.toDate() || new Date(),
             assignedAt: data.assignedAt?.toDate() || null,
             pickedUpAt: data.pickedUpAt?.toDate() || null,
-            completedAt: data.completedAt?.toDate() || new Date()
+            completedAt: data.completedAt?.toDate() || null
           };
-        }).sort((a, b) => b.completedAt - a.completedAt);
 
-        setRides(prev => ({ ...prev, completed: completedRides }));
+          if (data.status === 'pending') {
+            pending.push(ride);
+          } else if (data.status === 'active') {
+            active.push(ride);
+          } else if (data.status === 'completed' || data.status === 'cancelled' || data.status === 'terminated') {
+            completed.push(ride);
+          }
+        });
+
+        // Sort once per status
+        pending.sort((a, b) => a.requestedAt - b.requestedAt);
+        active.sort((a, b) => b.requestedAt - a.requestedAt);
+        completed.sort((a, b) => b.completedAt - a.completedAt);
+
+        setRides({ pending, active, completed });
+        setLoading(false);
       },
       (error) => {
-        logError('Completed Rides Query', error);
+        logError('All Rides Query', error);
+        setLoading(false);
       }
     );
 
-    return () => {
-      if (unsubPending) unsubPending();
-      if (unsubActive) unsubActive();
-      if (unsubCompleted) unsubCompleted();
-    };
+    return () => unsubscribe();
   }, [activeNDR]);
 
   return { rides, loading };
