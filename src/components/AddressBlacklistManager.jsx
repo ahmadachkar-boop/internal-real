@@ -67,24 +67,40 @@ const AddressBlacklistManager = () => {
 
     // Listen to address blacklist
     const addressQuery = query(collection(db, 'addressBlacklist'), orderBy('requestedAt', 'desc'));
-    const unsubAddress = onSnapshot(addressQuery, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setRequests(data);
-      setLoading(false);
-    });
+    const unsubAddress = onSnapshot(
+      addressQuery,
+      (snapshot) => {
+        const data = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setRequests(data);
+        setLoading(false);
+      },
+      (error) => {
+        console.error('Error fetching address blacklist:', error);
+        setRequests([]);
+        setLoading(false);
+      }
+    );
 
     // Listen to phone blacklist
-    const phoneQuery = query(collection(db, 'phoneBlacklist'), orderBy('requestedAt', 'desc'));
-    const unsubPhone = onSnapshot(phoneQuery, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setPhoneBlacklist(data);
-    });
+    // Using createdAt for compatibility with older documents
+    const phoneQuery = query(collection(db, 'phoneBlacklist'), orderBy('createdAt', 'desc'));
+    const unsubPhone = onSnapshot(
+      phoneQuery,
+      (snapshot) => {
+        const data = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }));
+        setPhoneBlacklist(data);
+      },
+      (error) => {
+        console.error('Error fetching phone blacklist:', error);
+        setPhoneBlacklist([]);
+      }
+    );
 
     return () => {
       unsubAddress();
@@ -137,7 +153,7 @@ const AddressBlacklistManager = () => {
   const handleAddressValueChange = (value) => {
     setNewEntry({ ...newEntry, value });
 
-    if (newEntry.type === 'address' && value.length >= 3) {
+    if (newEntry.type === 'address' && value && value.length >= 3) {
       fetchAddressSuggestions(value, (suggestions) => {
         setAddressSuggestions(suggestions);
         setShowAddressSuggestions(true);
