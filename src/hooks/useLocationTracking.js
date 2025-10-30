@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { collection, query, where, getDocs, updateDoc, doc, Timestamp, deleteDoc, setDoc, getDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, updateDoc, doc, Timestamp, deleteDoc, setDoc, getDoc, addDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import {
   isNativeApp,
