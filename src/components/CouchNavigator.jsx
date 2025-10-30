@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, memo } from 'react';
+import React, { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -205,6 +205,34 @@ const CouchNavigator = () => {
   } = useOfflineSync(activeNDR, selectedCar, locationEnabled);
 
   useHistoryTracking(mapRef, googleMapsLoaded, activeRides, carLocations);
+
+  // ===== MEMOIZED DERIVED STATE =====
+
+  // Memoize active rides for the selected car
+  const activeRideForCar = useMemo(() => {
+    return activeRides.find(ride => ride.carNumber === selectedCar);
+  }, [activeRides, selectedCar]);
+
+  // Memoize sorted messages
+  const sortedMessages = useMemo(() => {
+    return [...messages].sort((a, b) => {
+      const aTime = a.timestamp?.toMillis?.() || a.timestamp || 0;
+      const bTime = b.timestamp?.toMillis?.() || b.timestamp || 0;
+      return aTime - bTime;
+    });
+  }, [messages]);
+
+  // Memoize available car numbers for quick lookup
+  const carNumbers = useMemo(() => {
+    return availableCars.map(car => car.carNumber);
+  }, [availableCars]);
+
+  // Memoize whether the selected car has an active location
+  const hasCarLocation = useMemo(() => {
+    return selectedCar && carLocations[selectedCar] &&
+           carLocations[selectedCar].latitude &&
+           carLocations[selectedCar].longitude;
+  }, [selectedCar, carLocations]);
 
   // ===== EFFECTS =====
 
@@ -531,34 +559,34 @@ const CouchNavigator = () => {
 
   // ===== HANDLERS =====
 
-  const onMapLoad = (map) => {
+  const onMapLoad = useCallback((map) => {
     navigationLogger.log('🗺️ Map loaded!');
     mapRef.current = map;
     if (window.google?.maps?.Marker) {
       setGoogleMapsMarkerReady(true);
     }
-  };
+  }, []);
 
-  const centerMapOnCar = (carNum) => {
+  const centerMapOnCar = useCallback((carNum) => {
     if (!mapRef.current || !carLocations[carNum]) return;
     const location = carLocations[carNum];
     mapRef.current.panTo({ lat: location.latitude, lng: location.longitude });
     mapRef.current.setZoom(16);
-  };
+  }, [carLocations]);
 
-  const handleViewModeChange = (mode) => {
+  const handleViewModeChange = useCallback((mode) => {
     setViewMode(mode);
     localStorage.setItem('viewMode', mode);
-  };
+  }, []);
 
-  const handleCarSelect = (car) => {
+  const handleCarSelect = useCallback((car) => {
     if (car !== selectedCar) {
       initialMapCenterRef.current = null;
     }
     setSelectedCar(car);
-  };
+  }, [selectedCar]);
 
-  const handleDisconnect = async () => {
+  const handleDisconnect = useCallback(async () => {
     if (locationEnabled) {
       await stopLocationTracking();
     }
@@ -571,16 +599,16 @@ const CouchNavigator = () => {
     setLocationEnabled(false);
     setLocationDebugStatus('🔴 Disconnected');
     setTimeout(() => setLocationDebugStatus(''), 2000);
-  };
+  }, [locationEnabled, stopLocationTracking, setLocationEnabled, setLocationDebugStatus]);
 
-  const handleMessageChange = (e) => {
+  const handleMessageChange = useCallback((e) => {
     setNewMessage(e.target.value);
     handleTyping(e.target.value.length > 0);
-  };
+  }, [handleTyping]);
 
-  const handleMessageBlur = () => {
+  const handleMessageBlur = useCallback(() => {
     handleTyping(false);
-  };
+  }, [handleTyping]);
 
   // ===== LOADING AND ERROR STATES =====
 
@@ -749,7 +777,7 @@ const CouchNavigator = () => {
           viewMode={viewMode}
           activeNDR={activeNDR}
           availableCars={availableCars}
-          messages={messages}
+          messages={sortedMessages}
           locationEnabled={locationEnabled}
           isOnline={isOnline}
           firestoreConnected={firestoreConnected}
@@ -821,7 +849,7 @@ const CouchNavigator = () => {
 
                 <ChatBox
                   selectedCar={selectedCar}
-                  messages={messages}
+                  messages={sortedMessages}
                   messagesEndRef={messagesEndRef}
                   viewMode={viewMode}
                   isOtherTyping={isOtherTyping}
@@ -886,7 +914,7 @@ const CouchNavigator = () => {
 
                 <ChatBox
                   selectedCar={selectedCar}
-                  messages={messages}
+                  messages={sortedMessages}
                   messagesEndRef={messagesEndRef}
                   viewMode={viewMode}
                   isOtherTyping={isOtherTyping}

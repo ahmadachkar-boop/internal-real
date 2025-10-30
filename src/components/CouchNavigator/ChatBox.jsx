@@ -2,7 +2,66 @@ import React, { memo } from 'react';
 import { MessageSquare, Send } from 'lucide-react';
 import { getMessageStatusDisplay } from '../../messageStatusUtils';
 
-// Memoized messages component
+// Memoized individual message bubble component
+const MessageBubble = memo(({ msg, viewMode }) => {
+  const isOwnMessage =
+    (viewMode === 'navigator' && msg.sender === 'navigator') ||
+    (viewMode === 'couch' && msg.sender === 'couch');
+
+  const status = getMessageStatusDisplay(msg, viewMode);
+
+  return (
+    <div
+      className={`flex ${isOwnMessage ? 'justify-end' : 'justify-start'}`}
+    >
+      <div
+        className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+          viewMode === 'navigator' && msg.sender === 'navigator'
+            ? 'bg-blue-600 text-white'
+            : viewMode === 'couch' && msg.sender === 'couch'
+            ? 'bg-[#79F200] text-gray-900'
+            : 'bg-white border border-gray-200 text-gray-900'
+        }`}
+      >
+        <p className="text-xs font-semibold mb-1 opacity-70">
+          {isOwnMessage
+            ? 'You' + (viewMode === 'couch' ? ' (Couch)' : '')
+            : msg.senderName}
+        </p>
+        <p className="text-sm">{msg.message}</p>
+        <div className="flex items-center justify-between gap-2 mt-1">
+          <p className="text-xs opacity-60">
+            {msg.timestamp?.toLocaleTimeString()}
+          </p>
+          {status && (
+            <span
+              className={`text-xs ${status.color}`}
+              title={status.tooltip}
+            >
+              {status.icon}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}, (prevProps, nextProps) => {
+  // Custom comparison for optimal performance
+  // Return true if props are equal (no re-render needed)
+  return (
+    prevProps.msg.id === nextProps.msg.id &&
+    prevProps.msg.message === nextProps.msg.message &&
+    prevProps.msg.sender === nextProps.msg.sender &&
+    prevProps.msg.senderName === nextProps.msg.senderName &&
+    prevProps.msg.status === nextProps.msg.status &&
+    prevProps.msg.synced === nextProps.msg.synced &&
+    prevProps.msg.error === nextProps.msg.error &&
+    prevProps.viewMode === nextProps.viewMode
+  );
+});
+MessageBubble.displayName = 'MessageBubble';
+
+// Memoized messages container component
 const MessagesDisplay = memo(({ messages, messagesEndRef, viewMode }) => {
   return (
     <div className="h-80 overflow-y-auto mb-4 space-y-3 p-4 bg-gray-50 rounded-xl">
@@ -10,52 +69,7 @@ const MessagesDisplay = memo(({ messages, messagesEndRef, viewMode }) => {
         <p className="text-center text-gray-500 py-8">No messages yet</p>
       ) : (
         messages.map(msg => (
-          <div
-            key={msg.id}
-            className={`flex ${
-              (viewMode === 'navigator' && msg.sender === 'navigator') ||
-              (viewMode === 'couch' && msg.sender === 'couch')
-                ? 'justify-end'
-                : 'justify-start'
-            }`}
-          >
-            <div
-              className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-                (viewMode === 'navigator' && msg.sender === 'navigator')
-                  ? 'bg-blue-600 text-white'
-                  : (viewMode === 'couch' && msg.sender === 'couch')
-                  ? 'bg-[#79F200] text-gray-900'
-                  : 'bg-white border border-gray-200 text-gray-900'
-              }`}
-            >
-              <p className="text-xs font-semibold mb-1 opacity-70">
-                {(viewMode === 'navigator' && msg.sender === 'navigator') ||
-                 (viewMode === 'couch' && msg.sender === 'couch')
-                  ? 'You' + (viewMode === 'couch' ? ' (Couch)' : '')
-                  : msg.senderName}
-              </p>
-              <p className="text-sm">{msg.message}</p>
-              <div className="flex items-center justify-between gap-2 mt-1">
-                <p className="text-xs opacity-60">
-                  {msg.timestamp?.toLocaleTimeString()}
-                </p>
-                {(() => {
-                  const status = getMessageStatusDisplay(msg, viewMode);
-                  if (status) {
-                    return (
-                      <span
-                        className={`text-xs ${status.color}`}
-                        title={status.tooltip}
-                      >
-                        {status.icon}
-                      </span>
-                    );
-                  }
-                  return null;
-                })()}
-              </div>
-            </div>
-          </div>
+          <MessageBubble key={msg.id} msg={msg} viewMode={viewMode} />
         ))
       )}
       <div ref={messagesEndRef} />

@@ -248,7 +248,7 @@ export const syncQueuedMessages = async (sendFunction) => {
   }
 
   isSyncing = true;
-  offlineLogger.log(`🔄 Starting sync of ${queue.length} queued messages...`);
+  offlineLogger.log(`🔄 Starting batch sync of ${queue.length} queued messages...`);
 
   const results = {
     success: 0,
@@ -256,35 +256,56 @@ export const syncQueuedMessages = async (sendFunction) => {
     errors: []
   };
 
-  for (const queuedMessage of queue) {
-    try {
-      // Call the provided send function (should be addDoc from Firebase)
-      await sendFunction(queuedMessage);
+  const BATCH_SIZE = 5;
+  let shouldStopSync = false;
 
-      // Remove successfully sent message from queue
-      removeQueuedMessage(queuedMessage.id);
-      results.success++;
+  // Process messages in batches of 5
+  for (let i = 0; i < queue.length; i += BATCH_SIZE) {
+    if (shouldStopSync) break;
 
-      offlineLogger.log(`✅ Synced message: ${queuedMessage.message.substring(0, 30)}...`);
-    } catch (error) {
-      console.error(`❌ Failed to sync message:`, error);
-      results.failed++;
-      results.errors.push({
-        message: queuedMessage,
-        error: error.message
-      });
+    const batch = queue.slice(i, i + BATCH_SIZE);
+    offlineLogger.log(`🔄 Processing batch ${Math.floor(i / BATCH_SIZE) + 1} (${batch.length} messages)...`);
 
-      // If we get permission denied or other fatal errors, stop syncing
-      if (error.code === 'permission-denied') {
-        console.error('❌ Permission denied - stopping sync');
-        break;
+    // Process all messages in this batch concurrently
+    const batchResults = await Promise.allSettled(
+      batch.map(msg => sendFunction(msg))
+    );
+
+    // Process results
+    batchResults.forEach((result, idx) => {
+      const queuedMessage = batch[idx];
+
+      if (result.status === 'fulfilled') {
+        // Remove successfully sent message from queue
+        removeQueuedMessage(queuedMessage.id);
+        results.success++;
+        offlineLogger.log(`✅ Synced message: ${queuedMessage.message.substring(0, 30)}...`);
+      } else {
+        // Handle failure
+        console.error(`❌ Failed to sync message:`, result.reason);
+        results.failed++;
+        results.errors.push({
+          message: queuedMessage,
+          error: result.reason?.message || 'Unknown error'
+        });
+
+        // If we get permission denied or other fatal errors, stop syncing
+        if (result.reason?.code === 'permission-denied') {
+          console.error('❌ Permission denied - stopping sync');
+          shouldStopSync = true;
+        }
       }
+    });
+
+    // Add a small delay between batches to avoid overwhelming Firestore
+    if (i + BATCH_SIZE < queue.length && !shouldStopSync) {
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
 
   isSyncing = false;
 
-  offlineLogger.log(`🔄 Sync complete: ${results.success} sent, ${results.failed} failed`);
+  offlineLogger.log(`🔄 Batch sync complete: ${results.success} sent, ${results.failed} failed`);
 
   return {
     success: true,

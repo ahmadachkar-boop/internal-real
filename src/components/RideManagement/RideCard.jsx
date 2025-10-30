@@ -332,4 +332,45 @@ const RideCard = ({
   );
 };
 
-export default RideCard;
+// Wrap with React.memo for performance optimization
+export default React.memo(RideCard, (prevProps, nextProps) => {
+  // Return true if props are equal (no re-render needed)
+  // Return false if props are different (re-render needed)
+
+  // Check if the ride data changed
+  if (prevProps.ride.id !== nextProps.ride.id) return false;
+  if (prevProps.ride.status !== nextProps.ride.status) return false;
+  if (prevProps.ride.riders !== nextProps.ride.riders) return false;
+  if (prevProps.ride.carNumber !== nextProps.ride.carNumber) return false;
+  if (prevProps.ride.pickedUpAt !== nextProps.ride.pickedUpAt) return false;
+  if (prevProps.ride.requestedAt !== nextProps.ride.requestedAt) return false;
+  if (prevProps.ride.patronName !== nextProps.ride.patronName) return false;
+  if (prevProps.ride.phone !== nextProps.ride.phone) return false;
+  if (prevProps.ride.pickup !== nextProps.ride.pickup) return false;
+
+  // Check dropoffs array
+  const prevDropoffs = prevProps.ride.dropoffs || [prevProps.ride.dropoff];
+  const nextDropoffs = nextProps.ride.dropoffs || [nextProps.ride.dropoff];
+  if (prevDropoffs.length !== nextDropoffs.length) return false;
+  if (prevDropoffs.some((d, i) => d !== nextDropoffs[i])) return false;
+
+  // Check other props
+  if (prevProps.index !== nextProps.index) return false;
+  if (prevProps.activeTab !== nextProps.activeTab) return false;
+
+  // Check multi-ride suggestions
+  const prevSuggestions = prevProps.multiRideSuggestions[prevProps.ride.id] || [];
+  const nextSuggestions = nextProps.multiRideSuggestions[nextProps.ride.id] || [];
+  if (prevSuggestions.length !== nextSuggestions.length) return false;
+
+  // Check loading states for this specific ride
+  const prevLoading = prevProps.loadingStates;
+  const nextLoading = nextProps.loadingStates;
+  if (prevLoading.startingRide[prevProps.ride.id] !== nextLoading.startingRide[nextProps.ride.id]) return false;
+  if (prevLoading.completingRide[prevProps.ride.id] !== nextLoading.completingRide[nextProps.ride.id]) return false;
+  if (prevLoading.cancellingRide[prevProps.ride.id] !== nextLoading.cancellingRide[nextProps.ride.id]) return false;
+  if (prevLoading.terminatingRide[prevProps.ride.id] !== nextLoading.terminatingRide[nextProps.ride.id]) return false;
+
+  // All relevant props are equal, skip re-render
+  return true;
+});
