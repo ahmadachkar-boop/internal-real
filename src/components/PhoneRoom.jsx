@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { db, auth } from '../firebase';
-import { collection, addDoc, query, getDocs, where, Timestamp } from 'firebase/firestore';
+import { collection, addDoc, query, getDocs, where, Timestamp, onSnapshot } from 'firebase/firestore';
 import { useActiveNDR } from '../ActiveNDRContext';
-import { AlertCircle, Phone, Users, Send, CheckCircle, XCircle, Shield, AlertTriangle } from 'lucide-react';
+import { AlertCircle, Phone, Users, Send, CheckCircle, XCircle, Shield, AlertTriangle, Plus, X, MapPin, Clock, TrendingUp } from 'lucide-react';
 import { useGoogleMaps } from '../GoogleMapsProvider';
 import { useCommonLocations } from '../hooks/useCommonLocations';
 import { useDuplicateCaller } from '../hooks/useDuplicateCaller';
@@ -12,7 +12,6 @@ import DuplicateCallerWarning from './PhoneRoom/DuplicateCallerWarning';
 import EstimatedWaitTime from './PhoneRoom/EstimatedWaitTime';
 import BlacklistRequestModal from './PhoneRoom/BlacklistRequestModal';
 import BlacklistViewerModal from './PhoneRoom/BlacklistViewerModal';
-import AddressAutocomplete from './PhoneRoom/AddressAutocomplete';
 
 // Development logging helper
 const isDev = process.env.NODE_ENV === 'development';
@@ -65,6 +64,17 @@ const PhoneRoom = () => {
   const [showBlacklistModal, setShowBlacklistModal] = useState(false);
   const [showBlacklistViewer, setShowBlacklistViewer] = useState(false);
 
+  // Autocomplete state
+  const [pickupSuggestions, setPickupSuggestions] = useState([]);
+  const [dropoffSuggestions, setDropoffSuggestions] = useState([[]]);
+  const [showPickupSuggestions, setShowPickupSuggestions] = useState(false);
+  const [showDropoffSuggestions, setShowDropoffSuggestions] = useState([false]);
+  const [showCommonPickups, setShowCommonPickups] = useState(false);
+  const [showCommonDropoffs, setShowCommonDropoffs] = useState([false]);
+  const pickupRef = useRef(null);
+  const dropoffRefs = useRef([]);
+  const autocompleteService = useRef(null);
+
   // Use extracted hooks
   const commonLocations = useCommonLocations(activeNDR);
   const duplicateCallerWarning = useDuplicateCaller(formData.phone, activeNDR);
@@ -75,12 +85,36 @@ const PhoneRoom = () => {
     getActiveBlacklists
   } = useBlacklist(activeNDR);
 
+  // Initialize Google Maps autocomplete service
+  useEffect(() => {
+    if (isLoaded && window.google) {
+      autocompleteService.current = new window.google.maps.places.AutocompleteService();
+    }
+  }, [isLoaded]);
+
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(user => {
       setCurrentUser(user);
     });
     return () => unsubscribe();
   }, []);
+
+  // Constants for address validation
+  const BCS_CENTER = { lat: 30.6280, lng: -96.3344 };
+  const MOCK_BCS_ADDRESSES = [
+    '123 University Dr, College Station, TX 77840',
+    '456 Texas Ave, Bryan, TX 77801',
+    '789 George Bush Dr, College Station, TX 77840',
+    '101 Main St, Bryan, TX 77801',
+    '202 Wellborn Rd, College Station, TX 77840',
+    '303 Villa Maria Rd, Bryan, TX 77802'
+  ];
+
+  const getMockBCSAddresses = (input) => {
+    return MOCK_BCS_ADDRESSES.filter(addr =>
+      addr.toLowerCase().includes(input.toLowerCase())
+    );
+  };
 
   // Address validation helper
   const validateAddress = (address) => {
@@ -95,6 +129,160 @@ const PhoneRoom = () => {
       .replace(/\s+/g, ' ')
       .replace(/[.,]/g, '')
       .trim();
+  };
+
+  // Click outside handler for autocomplete dropdowns
+  const handleClickOutside = useCallback((event) => {
+    if (pickupRef.current && !pickupRef.current.contains(event.target)) {
+      setShowPickupSuggestions(false);
+      setShowCommonPickups(false);
+    }
+
+    dropoffRefs.current.forEach((ref, index) => {
+      if (ref && !ref.contains(event.target)) {
+        setShowDropoffSuggestions(prev => {
+          const newShowSuggestions = [...prev];
+          newShowSuggestions[index] = false;
+          return newShowSuggestions;
+        });
+
+        setShowCommonDropoffs(prev => {
+          const newShowCommon = [...prev];
+          newShowCommon[index] = false;
+          return newShowCommon;
+        });
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [handleClickOutside]);
+
+  // Fetch address suggestions from Google Maps API
+  const fetchAddressSuggestions = (input, callback) => {
+    if (!input || input.length < 3) {
+      callback([]);
+      return;
+    }
+
+    if (!isLoaded || !autocompleteService.current) {
+      const mockResults = getMockBCSAddresses(input);
+      callback(mockResults);
+      return;
+    }
+
+    autocompleteService.current.getPlacePredictions(
+      {
+        input,
+        location: new window.google.maps.LatLng(BCS_CENTER.lat, BCS_CENTER.lng),
+        radius: 20000,
+        componentRestrictions: { country: 'us' }
+      },
+      (predictions, status) => {
+        if (status === window.google.maps.places.PlacesServiceStatus.OK && predictions) {
+          const filteredPredictions = predictions
+            .map(p => p.description)
+            .filter(desc => {
+              const lower = desc.toLowerCase();
+              return VALID_ZIP_CODES.some(zip => lower.includes(zip)) ||
+                     VALID_CITIES.some(city => lower.includes(city));
+            });
+          callback(filteredPredictions);
+        } else {
+          const mockResults = getMockBCSAddresses(input);
+          callback(mockResults);
+        }
+      }
+    );
+  };
+
+  // Pickup location handlers
+  const handlePickupChange = (value) => {
+    setFormData({ ...formData, pickup: value });
+
+    if (value.length >= 3) {
+      fetchAddressSuggestions(value, (suggestions) => {
+        setPickupSuggestions(suggestions);
+        setShowPickupSuggestions(true);
+        setShowCommonPickups(false);
+      });
+    } else {
+      setPickupSuggestions([]);
+      setShowPickupSuggestions(false);
+    }
+  };
+
+  const selectPickupSuggestion = (address) => {
+    setFormData({ ...formData, pickup: address });
+    setShowPickupSuggestions(false);
+    setShowCommonPickups(false);
+    setPickupSuggestions([]);
+  };
+
+  // Dropoff location handlers
+  const handleDropoffChange = (index, value) => {
+    const newDropoffs = [...formData.dropoffs];
+    newDropoffs[index] = value;
+    setFormData({ ...formData, dropoffs: newDropoffs });
+
+    fetchAddressSuggestions(value, (suggestions) => {
+      const newSuggestions = [...dropoffSuggestions];
+      newSuggestions[index] = suggestions;
+      setDropoffSuggestions(newSuggestions);
+    });
+
+    const newShowSuggestions = [...showDropoffSuggestions];
+    newShowSuggestions[index] = true;
+    setShowDropoffSuggestions(newShowSuggestions);
+
+    const newShowCommon = [...showCommonDropoffs];
+    newShowCommon[index] = false;
+    setShowCommonDropoffs(newShowCommon);
+  };
+
+  const selectDropoffSuggestion = (index, address) => {
+    const newDropoffs = [...formData.dropoffs];
+    newDropoffs[index] = address;
+    setFormData({ ...formData, dropoffs: newDropoffs });
+
+    const newShowSuggestions = [...showDropoffSuggestions];
+    newShowSuggestions[index] = false;
+    setShowDropoffSuggestions(newShowSuggestions);
+
+    const newSuggestions = [...dropoffSuggestions];
+    newSuggestions[index] = [];
+    setDropoffSuggestions(newSuggestions);
+
+    const newShowCommon = [...showCommonDropoffs];
+    newShowCommon[index] = false;
+    setShowCommonDropoffs(newShowCommon);
+  };
+
+  // Add/remove dropoff handlers
+  const addDropoff = () => {
+    setFormData({
+      ...formData,
+      dropoffs: [...formData.dropoffs, '']
+    });
+    setDropoffSuggestions([...dropoffSuggestions, []]);
+    setShowDropoffSuggestions([...showDropoffSuggestions, false]);
+    setShowCommonDropoffs([...showCommonDropoffs, false]);
+  };
+
+  const removeDropoff = (index) => {
+    if (formData.dropoffs.length === 1) return;
+
+    const newDropoffs = formData.dropoffs.filter((_, i) => i !== index);
+    const newSuggestions = dropoffSuggestions.filter((_, i) => i !== index);
+    const newShowSuggestions = showDropoffSuggestions.filter((_, i) => i !== index);
+    const newShowCommon = showCommonDropoffs.filter((_, i) => i !== index);
+
+    setFormData({ ...formData, dropoffs: newDropoffs });
+    setDropoffSuggestions(newSuggestions);
+    setShowDropoffSuggestions(newShowSuggestions);
+    setShowCommonDropoffs(newShowCommon);
   };
 
   const handleSubmit = async () => {
@@ -404,25 +592,171 @@ const PhoneRoom = () => {
               </div>
             )}
 
-            {/* Use AddressAutocomplete component for pickup */}
-            <AddressAutocomplete
-              label="Pickup Location"
-              value={formData.pickup}
-              onChange={(value) => setFormData({ ...formData, pickup: value })}
-              commonLocations={commonLocations}
-              isLoaded={isLoaded}
-            />
-
-            {/* Use AddressAutocomplete component for dropoffs */}
-            <div>
-              <AddressAutocomplete
-                label="Dropoff Location(s)"
-                value={formData.dropoffs}
-                onChange={(value) => setFormData({ ...formData, dropoffs: value })}
-                commonLocations={commonLocations}
-                isLoaded={isLoaded}
-                multiple={true}
+            {/* Pickup Location with autocomplete */}
+            <div className="relative" ref={pickupRef}>
+              <label className="block text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+                <MapPin size={16} />
+                Pickup Location
+              </label>
+              <input
+                type="text"
+                inputMode="text"
+                autoComplete="street-address"
+                value={formData.pickup}
+                onChange={(e) => handlePickupChange(e.target.value)}
+                onFocus={() => {
+                  if (commonLocations.length > 0 && !formData.pickup) {
+                    setShowCommonPickups(true);
+                  }
+                }}
+                className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-[#79F200] focus:border-[#79F200] transition outline-none text-gray-900"
+                placeholder="Start typing address..."
               />
+
+              {/* Common Pickups */}
+              {showCommonPickups && commonLocations.length > 0 && (
+                <div className="absolute z-10 w-full mt-2 bg-white border-2 border-[#79F200] rounded-xl shadow-2xl max-h-48 md:max-h-64 lg:max-h-80 overflow-y-auto">
+                  <div className="p-3 bg-[#79F200] sticky top-0">
+                    <p className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                      <TrendingUp size={16} />
+                      Common Locations Tonight
+                    </p>
+                  </div>
+                  {commonLocations.map((location, index) => (
+                    <div
+                      key={index}
+                      onClick={() => {
+                        selectPickupSuggestion(location.address);
+                        setShowCommonPickups(false);
+                      }}
+                      className="px-4 py-3 hover:bg-[#79F200]/20 cursor-pointer transition flex items-center justify-between border-b border-gray-100 last:border-0"
+                    >
+                      <div className="flex items-center gap-2 flex-1">
+                        <MapPin size={16} className="text-[#79F200] flex-shrink-0" />
+                        <span className="text-sm text-gray-900">{location.address}</span>
+                      </div>
+                      <span className="text-xs font-bold text-gray-600 bg-gray-200 px-2 py-1 rounded-full">
+                        {location.count}x
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {showPickupSuggestions && pickupSuggestions.length > 0 && (
+                <div className="absolute z-10 w-full mt-2 bg-white border-2 border-[#79F200] rounded-xl shadow-2xl max-h-40 md:max-h-56 lg:max-h-64 overflow-y-auto">
+                  {pickupSuggestions.map((suggestion, index) => (
+                    <div
+                      key={index}
+                      onClick={() => selectPickupSuggestion(suggestion)}
+                      className="px-4 py-3 hover:bg-[#79F200]/20 cursor-pointer transition flex items-center gap-2 border-b border-gray-100 last:border-0"
+                    >
+                      <MapPin size={16} className="text-[#79F200]" />
+                      <span className="text-sm text-gray-900">{suggestion}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Dropoff Locations with autocomplete */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2 flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <MapPin size={16} />
+                  Dropoff Location(s)
+                </span>
+                <button
+                  type="button"
+                  onClick={addDropoff}
+                  className="px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg transition text-xs font-bold flex items-center gap-1"
+                >
+                  <Plus size={14} />
+                  Add Stop
+                </button>
+              </label>
+
+              {formData.dropoffs.map((dropoff, index) => (
+                <div key={index} className="mb-3">
+                  <div className="flex gap-2">
+                    <div
+                      className="relative flex-1"
+                      ref={(el) => (dropoffRefs.current[index] = el)}
+                    >
+                      <input
+                        type="text"
+                        value={dropoff}
+                        onChange={(e) => handleDropoffChange(index, e.target.value)}
+                        onFocus={() => {
+                          if (commonLocations.length > 0 && !dropoff) {
+                            const newShowCommon = [...showCommonDropoffs];
+                            newShowCommon[index] = true;
+                            setShowCommonDropoffs(newShowCommon);
+                          }
+                        }}
+                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-[#79F200] focus:border-[#79F200] transition outline-none text-gray-900"
+                        placeholder={`Dropoff ${formData.dropoffs.length > 1 ? index + 1 : ''} address...`}
+                      />
+
+                      {/* Common Dropoffs */}
+                      {showCommonDropoffs[index] && commonLocations.length > 0 && (
+                        <div className="absolute z-10 w-full mt-2 bg-white border-2 border-[#79F200] rounded-xl shadow-2xl max-h-48 md:max-h-64 lg:max-h-80 overflow-y-auto">
+                          <div className="p-3 bg-[#79F200] sticky top-0">
+                            <p className="text-sm font-bold text-gray-900 flex items-center gap-2">
+                              <TrendingUp size={16} />
+                              Common Locations Tonight
+                            </p>
+                          </div>
+                          {commonLocations.map((location, locIndex) => (
+                            <div
+                              key={locIndex}
+                              onClick={() => {
+                                selectDropoffSuggestion(index, location.address);
+                                const newShowCommon = [...showCommonDropoffs];
+                                newShowCommon[index] = false;
+                                setShowCommonDropoffs(newShowCommon);
+                              }}
+                              className="px-4 py-3 hover:bg-[#79F200]/20 cursor-pointer transition flex items-center justify-between border-b border-gray-100 last:border-0"
+                            >
+                              <div className="flex items-center gap-2 flex-1">
+                                <MapPin size={16} className="text-[#79F200] flex-shrink-0" />
+                                <span className="text-sm text-gray-900">{location.address}</span>
+                              </div>
+                              <span className="text-xs font-bold text-gray-600 bg-gray-200 px-2 py-1 rounded-full">
+                                {location.count}x
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {showDropoffSuggestions[index] && dropoffSuggestions[index]?.length > 0 && (
+                        <div className="absolute z-10 w-full mt-2 bg-white border-2 border-[#79F200] rounded-xl shadow-2xl max-h-40 md:max-h-56 lg:max-h-64 overflow-y-auto">
+                          {dropoffSuggestions[index].map((suggestion, suggestionIndex) => (
+                            <div
+                              key={suggestionIndex}
+                              onClick={() => selectDropoffSuggestion(index, suggestion)}
+                              className="px-4 py-3 hover:bg-[#79F200]/20 cursor-pointer transition flex items-center gap-2 border-b border-gray-100 last:border-0"
+                            >
+                              <MapPin size={16} className="text-[#79F200]" />
+                              <span className="text-sm text-gray-900">{suggestion}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {formData.dropoffs.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeDropoff(index)}
+                        className="px-3 py-3 bg-red-100 hover:bg-red-200 text-red-700 rounded-xl transition flex items-center justify-center"
+                      >
+                        <X size={18} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
 
             <div>
