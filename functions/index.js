@@ -420,12 +420,18 @@ async function notifyNavigator(message, messageId) {
 
     console.log(`Found ${assignedMemberIds.length} member(s) assigned to car ${carNumber}:`, assignedMemberIds);
 
-    // Get FCM tokens for assigned members
+    // Get FCM tokens for assigned members with token-to-memberId mapping
     const tokens = [];
+    const tokenToMemberMap = {}; // Map token index to memberId for cleanup
+    let tokenIndex = 0;
+
     for (const memberId of assignedMemberIds) {
       const tokenDoc = await db.collection("fcmTokens").doc(memberId).get();
       if (tokenDoc.exists && tokenDoc.data().token) {
-        tokens.push(tokenDoc.data().token);
+        const token = tokenDoc.data().token;
+        tokens.push(token);
+        tokenToMemberMap[tokenIndex] = memberId;
+        tokenIndex++;
         console.log(`✅ Found token for member ${memberId}`);
       }
     }
@@ -475,13 +481,55 @@ async function notifyNavigator(message, messageId) {
 
     console.log(`✅ Notification sent! Success: ${response.successCount}, Failed: ${response.failureCount}`);
 
-    // Log any failures
+    // Handle failures with detailed error analysis
     if (response.failureCount > 0) {
+      const tokensToRemove = [];
+
       response.responses.forEach((resp, idx) => {
         if (!resp.success) {
-          console.error(`Failed to send to token ${idx}:`, resp.error);
+          const errorCode = resp.error?.code;
+          const memberId = tokenToMemberMap[idx];
+
+          console.error(`Failed to send to token ${idx} (member: ${memberId}):`, {
+            code: errorCode,
+            message: resp.error?.message,
+          });
+
+          // Check for errors that indicate invalid/expired tokens
+          const invalidTokenErrors = [
+            "messaging/invalid-registration-token",
+            "messaging/registration-token-not-registered",
+            "messaging/invalid-argument",
+          ];
+
+          // Check for APNS-specific auth errors
+          if (errorCode === "messaging/third-party-auth-error") {
+            console.error(`⚠️  APNS Authentication Error: This requires Firebase Console configuration check.`);
+            console.error(`   Verify APNS credentials are correctly configured in Firebase Console:`);
+            console.error(`   - Go to Firebase Console > Project Settings > Cloud Messaging`);
+            console.error(`   - Check APNs Authentication Key or APNs Certificates`);
+            console.error(`   - Ensure the bundle ID matches your iOS app`);
+          } else if (invalidTokenErrors.includes(errorCode)) {
+            // Mark token for removal
+            tokensToRemove.push({idx, memberId});
+            console.log(`🗑️  Token marked for removal (member: ${memberId})`);
+          }
         }
       });
+
+      // Remove invalid tokens from database
+      if (tokensToRemove.length > 0) {
+        console.log(`Removing ${tokensToRemove.length} invalid token(s) from database...`);
+        const removePromises = tokensToRemove.map(async ({idx, memberId}) => {
+          try {
+            await db.collection("fcmTokens").doc(memberId).delete();
+            console.log(`✅ Removed invalid token for member ${memberId}`);
+          } catch (cleanupError) {
+            console.error(`Failed to remove token for member ${memberId}:`, cleanupError);
+          }
+        });
+        await Promise.allSettled(removePromises);
+      }
     }
   } catch (error) {
     console.error("❌ Error notifying navigator:", error);
@@ -526,12 +574,18 @@ async function notifyCouchUsers(message, messageId) {
 
     console.log(`Found ${couchUserIds.length} couch user(s) assigned:`, couchUserIds);
 
-    // Get FCM tokens for assigned couch users
+    // Get FCM tokens for assigned couch users with token-to-userId mapping
     const tokens = [];
+    const tokenToUserMap = {}; // Map token index to userId for cleanup
+    let tokenIndex = 0;
+
     for (const userId of couchUserIds) {
       const tokenDoc = await db.collection("fcmTokens").doc(userId).get();
       if (tokenDoc.exists && tokenDoc.data().token) {
-        tokens.push(tokenDoc.data().token);
+        const token = tokenDoc.data().token;
+        tokens.push(token);
+        tokenToUserMap[tokenIndex] = userId;
+        tokenIndex++;
         console.log(`✅ Found token for couch user ${userId}`);
       }
     }
@@ -582,13 +636,55 @@ async function notifyCouchUsers(message, messageId) {
 
     console.log(`✅ Notification sent! Success: ${response.successCount}, Failed: ${response.failureCount}`);
 
-    // Log any failures
+    // Handle failures with detailed error analysis
     if (response.failureCount > 0) {
+      const tokensToRemove = [];
+
       response.responses.forEach((resp, idx) => {
         if (!resp.success) {
-          console.error(`Failed to send to token ${idx}:`, resp.error);
+          const errorCode = resp.error?.code;
+          const userId = tokenToUserMap[idx];
+
+          console.error(`Failed to send to token ${idx} (user: ${userId}):`, {
+            code: errorCode,
+            message: resp.error?.message,
+          });
+
+          // Check for errors that indicate invalid/expired tokens
+          const invalidTokenErrors = [
+            "messaging/invalid-registration-token",
+            "messaging/registration-token-not-registered",
+            "messaging/invalid-argument",
+          ];
+
+          // Check for APNS-specific auth errors
+          if (errorCode === "messaging/third-party-auth-error") {
+            console.error(`⚠️  APNS Authentication Error: This requires Firebase Console configuration check.`);
+            console.error(`   Verify APNS credentials are correctly configured in Firebase Console:`);
+            console.error(`   - Go to Firebase Console > Project Settings > Cloud Messaging`);
+            console.error(`   - Check APNs Authentication Key or APNs Certificates`);
+            console.error(`   - Ensure the bundle ID matches your iOS app`);
+          } else if (invalidTokenErrors.includes(errorCode)) {
+            // Mark token for removal
+            tokensToRemove.push({idx, userId});
+            console.log(`🗑️  Token marked for removal (user: ${userId})`);
+          }
         }
       });
+
+      // Remove invalid tokens from database
+      if (tokensToRemove.length > 0) {
+        console.log(`Removing ${tokensToRemove.length} invalid token(s) from database...`);
+        const removePromises = tokensToRemove.map(async ({idx, userId}) => {
+          try {
+            await db.collection("fcmTokens").doc(userId).delete();
+            console.log(`✅ Removed invalid token for user ${userId}`);
+          } catch (cleanupError) {
+            console.error(`Failed to remove token for user ${userId}:`, cleanupError);
+          }
+        });
+        await Promise.allSettled(removePromises);
+      }
     }
   } catch (error) {
     console.error("❌ Error notifying couch users:", error);
