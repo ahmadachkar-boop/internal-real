@@ -1,10 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db, auth } from '../firebase';
-import { collection, query, onSnapshot, doc, updateDoc, deleteDoc, Timestamp, where, orderBy, addDoc } from 'firebase/firestore';
-import { Shield, AlertTriangle, CheckCircle, XCircle, Clock, Trash2, MapPin, Phone } from 'lucide-react';
+import { collection, query, onSnapshot, doc, updateDoc, deleteDoc, Timestamp, orderBy, addDoc } from 'firebase/firestore';
+import { Shield, CheckCircle, XCircle, Clock, Trash2, MapPin, Phone } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import { useActiveNDR } from '../ActiveNDRContext';
+import { useLoadScript } from '@react-google-maps/api';
+import AddressAutocomplete from './PhoneRoom/AddressAutocomplete';
 
+
+const libraries = ['places'];
 
 const AddressBlacklistManager = () => {
   const [requests, setRequests] = useState([]);
@@ -20,9 +24,43 @@ const AddressBlacklistManager = () => {
     appliesToPickup: true,
     appliesToDropoff: true
   });
-  const { currentUser, userProfile } = useAuth();
-    const { activeNDR } = useActiveNDR();
+  const { userProfile } = useAuth();
+  const { activeNDR } = useActiveNDR();
 
+  // Address autocomplete state
+  const [addressSuggestions, setAddressSuggestions] = useState([]);
+  const [showAddressSuggestions, setShowAddressSuggestions] = useState(false);
+  const addressInputRef = useRef(null);
+  const autocompleteService = useRef(null);
+
+  // Load Google Maps
+  const { isLoaded } = useLoadScript({
+    googleMapsApiKey: process.env.REACT_APP_GOOGLE_MAPS_API_KEY,
+    libraries
+  });
+
+  // Phone number formatting function
+  const formatPhoneNumber = (value) => {
+    if (!value) return '';
+    const cleaned = value.replace(/\D/g, '');
+    const limited = cleaned.slice(0, 10);
+
+    if (limited.length <= 3) {
+      return limited;
+    } else if (limited.length <= 6) {
+      return `(${limited.slice(0, 3)}) ${limited.slice(3)}`;
+    } else {
+      return `(${limited.slice(0, 3)}) ${limited.slice(3, 6)}-${limited.slice(6)}`;
+    }
+  };
+
+
+  // Initialize Google Maps autocomplete service
+  useEffect(() => {
+    if (isLoaded && window.google) {
+      autocompleteService.current = new window.google.maps.places.AutocompleteService();
+    }
+  }, [isLoaded]);
 
   useEffect(() => {
     setLoading(true);
@@ -39,7 +77,7 @@ const AddressBlacklistManager = () => {
     });
 
     // Listen to phone blacklist
-    const phoneQuery = query(collection(db, 'phoneBlacklist'), orderBy('createdAt', 'desc'));
+    const phoneQuery = query(collection(db, 'phoneBlacklist'), orderBy('requestedAt', 'desc'));
     const unsubPhone = onSnapshot(phoneQuery, (snapshot) => {
       const data = snapshot.docs.map(doc => ({
         id: doc.id,
@@ -53,6 +91,69 @@ const AddressBlacklistManager = () => {
       unsubPhone();
     };
   }, []);
+
+  // BCS constants for address validation
+  const BCS_CENTER = { lat: 30.6280, lng: -96.3344 };
+  const VALID_ZIP_CODES = ['77801', '77802', '77803', '77807', '77808', '77840', '77841', '77842', '77843', '77844', '77845'];
+  const VALID_CITIES = ['bryan', 'college station', 'college-station'];
+
+  // Fetch address suggestions using Google Maps API
+  const fetchAddressSuggestions = (input, callback) => {
+    if (!input || input.length < 3) {
+      callback([]);
+      return;
+    }
+
+    if (!isLoaded || !autocompleteService.current) {
+      callback([]);
+      return;
+    }
+
+    autocompleteService.current.getPlacePredictions(
+      {
+        input,
+        location: new window.google.maps.LatLng(BCS_CENTER.lat, BCS_CENTER.lng),
+        radius: 20000,
+        componentRestrictions: { country: 'us' }
+      },
+      (predictions, status) => {
+        if (status === window.google.maps.places.PlacesServiceStatus.OK && predictions) {
+          const filteredPredictions = predictions
+            .map(p => p.description)
+            .filter(desc => {
+              const lower = desc.toLowerCase();
+              return VALID_ZIP_CODES.some(zip => lower.includes(zip)) ||
+                     VALID_CITIES.some(city => lower.includes(city));
+            });
+          callback(filteredPredictions);
+        } else {
+          callback([]);
+        }
+      }
+    );
+  };
+
+  // Handle address value change
+  const handleAddressValueChange = (value) => {
+    setNewEntry({ ...newEntry, value });
+
+    if (newEntry.type === 'address' && value.length >= 3) {
+      fetchAddressSuggestions(value, (suggestions) => {
+        setAddressSuggestions(suggestions);
+        setShowAddressSuggestions(true);
+      });
+    } else {
+      setAddressSuggestions([]);
+      setShowAddressSuggestions(false);
+    }
+  };
+
+  // Handle address suggestion selection
+  const selectAddressSuggestion = (address) => {
+    setNewEntry({ ...newEntry, value: address });
+    setShowAddressSuggestions(false);
+    setAddressSuggestions([]);
+  };
 
   const handleAddEntry = async () => {
     if (!newEntry.value || !newEntry.reason) {
@@ -209,16 +310,42 @@ const AddressBlacklistManager = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2">
-                {newEntry.type === 'address' ? 'Address' : 'Phone Number'}
-              </label>
-              <input
-                type="text"
-                value={newEntry.value}
-                onChange={(e) => setNewEntry({...newEntry, value: e.target.value})}
-                placeholder={newEntry.type === 'address' ? 'Enter address...' : 'Enter phone number...'}
-                className="w-full px-4 py-2 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500"
-              />
+              {newEntry.type === 'address' ? (
+                <AddressAutocomplete
+                  value={newEntry.value}
+                  onChange={handleAddressValueChange}
+                  onSelect={selectAddressSuggestion}
+                  label="Address"
+                  placeholder="Start typing address..."
+                  suggestions={addressSuggestions}
+                  showSuggestions={showAddressSuggestions}
+                  setShowSuggestions={setShowAddressSuggestions}
+                  commonLocations={[]}
+                  showCommonLocations={false}
+                  setShowCommonLocations={() => {}}
+                  inputRef={addressInputRef}
+                  required
+                  borderColor="border-red-500"
+                  inputClassName="focus:ring-red-500 focus:border-red-500"
+                />
+              ) : (
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Phone Number
+                  </label>
+                  <input
+                    type="text"
+                    value={newEntry.value}
+                    onChange={(e) => {
+                      const formatted = formatPhoneNumber(e.target.value);
+                      setNewEntry({...newEntry, value: formatted});
+                    }}
+                    placeholder="(555) 123-4567"
+                    maxLength={14}
+                    className="w-full px-4 py-2 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                  />
+                </div>
+              )}
             </div>
 
             <div>
@@ -393,7 +520,7 @@ const AddressBlacklistManager = () => {
                       <div key={request.id} className="bg-white rounded-xl p-6 shadow-lg border-l-4 border-yellow-500">
                         <div className="flex justify-between items-start mb-4">
                           <div className="flex-1">
-                            <h3 className="text-lg font-bold text-gray-900">{request.phone}</h3>
+                            <h3 className="text-lg font-bold text-gray-900">{formatPhoneNumber(request.phone)}</h3>
                             <p className="text-sm text-gray-600 mt-1">Requested by: {request.requestedBy}</p>
                             <p className="text-xs text-gray-500 mt-1">
                               {request.requestedAt?.toDate().toLocaleString()}
@@ -495,7 +622,7 @@ const AddressBlacklistManager = () => {
                 <div key={entry.id} className="bg-white rounded-xl p-6 shadow-lg border-l-4 border-red-500">
                   <div className="flex justify-between items-start mb-3">
                     <div className="flex-1">
-                      <h3 className="text-lg font-bold text-gray-900">{entry.phone}</h3>
+                      <h3 className="text-lg font-bold text-gray-900">{formatPhoneNumber(entry.phone)}</h3>
                       <p className="text-sm text-gray-600">Added by: {entry.approvedBy || entry.requestedBy}</p>
                     </div>
                     <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
