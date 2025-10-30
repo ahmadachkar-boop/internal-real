@@ -1,9 +1,18 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db, auth } from '../firebase';
-import { collection, addDoc, query, onSnapshot, where, Timestamp, getDocs } from 'firebase/firestore';
+import { collection, addDoc, query, getDocs, where, Timestamp } from 'firebase/firestore';
 import { useActiveNDR } from '../ActiveNDRContext';
-import { AlertCircle, Phone, MapPin, Users, Send, CheckCircle, XCircle, Shield, AlertTriangle, Plus, X, Clock, TrendingUp } from 'lucide-react';
+import { AlertCircle, Phone, Users, Send, CheckCircle, XCircle, Shield, AlertTriangle } from 'lucide-react';
 import { useGoogleMaps } from '../GoogleMapsProvider';
+import { useCommonLocations } from '../hooks/useCommonLocations';
+import { useDuplicateCaller } from '../hooks/useDuplicateCaller';
+import { useWaitTime } from '../hooks/useWaitTime';
+import { useBlacklist } from '../hooks/useBlacklist';
+import DuplicateCallerWarning from './PhoneRoom/DuplicateCallerWarning';
+import EstimatedWaitTime from './PhoneRoom/EstimatedWaitTime';
+import BlacklistRequestModal from './PhoneRoom/BlacklistRequestModal';
+import BlacklistViewerModal from './PhoneRoom/BlacklistViewerModal';
+import AddressAutocomplete from './PhoneRoom/AddressAutocomplete';
 
 // Development logging helper
 const isDev = process.env.NODE_ENV === 'development';
@@ -17,24 +26,19 @@ const devError = (...args) => {
 // Phone validation regex - valid US phone format
 const PHONE_REGEX = /^[2-9]\d{2}[2-9]\d{6}$/;
 
-// Mock addresses configuration
-const MOCK_BCS_ADDRESSES = [
-  '123 University Dr, College Station, TX 77840',
-  '456 Texas Ave, Bryan, TX 77801',
-  '789 George Bush Dr, College Station, TX 77840',
-  '101 Main St, Bryan, TX 77801',
-  '202 Wellborn Rd, College Station, TX 77840',
-  '303 Villa Maria Rd, Bryan, TX 77802'
-];
+// Valid zip codes and cities for address validation
+const VALID_ZIP_CODES = ['77801', '77802', '77803', '77807', '77808', '77840', '77841', '77842', '77843', '77844', '77845'];
+const VALID_CITIES = ['bryan', 'college station', 'college-station'];
 
 const PhoneRoom = () => {
   const { activeNDR, loading } = useActiveNDR();
   const { isLoaded, loadError } = useGoogleMaps();
-  
+
+  // Phone number formatting utility
   const formatPhoneNumber = (value) => {
     const cleaned = value.replace(/\D/g, '');
     const limited = cleaned.slice(0, 10);
-    
+
     if (limited.length <= 3) {
       return limited;
     } else if (limited.length <= 6) {
@@ -44,18 +48,7 @@ const PhoneRoom = () => {
     }
   };
 
-  const getActiveBlacklists = (blacklists, type) => {
-    if (!activeNDR) return [];
-    
-    return blacklists.filter(item => {
-      if (item.scope === 'permanent') return true;
-      if (item.scope === 'temporary') {
-        return item.ndrId === activeNDR.id;
-      }
-      return false;
-    });
-  };
-
+  // Form state
   const [formData, setFormData] = useState({
     name: '',
     phone: '',
@@ -67,533 +60,21 @@ const PhoneRoom = () => {
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('');
   const [currentUser, setCurrentUser] = useState(null);
-  
-  // NEW: Common locations tracking
-  const [commonLocations, setCommonLocations] = useState([]);
-  const [showCommonPickups, setShowCommonPickups] = useState(false);
-  const [showCommonDropoffs, setShowCommonDropoffs] = useState([false]);
-  
-  // NEW: Duplicate caller detection
-  const [duplicateCallerWarning, setDuplicateCallerWarning] = useState(null);
-  
-  // NEW: Estimated wait time
-  const [estimatedWaitTime, setEstimatedWaitTime] = useState(null);
-  const [calculatingWait, setCalculatingWait] = useState(false);
-  
+
+  // Modal states
   const [showBlacklistModal, setShowBlacklistModal] = useState(false);
   const [showBlacklistViewer, setShowBlacklistViewer] = useState(false);
-  const [blacklistRequest, setBlacklistRequest] = useState({
-    type: 'address',
-    value: '',
-    reason: '',
-    scope: 'permanent',
-    appliesToPickup: true,
-    appliesToDropoff: true
-  });
-  const [blacklistedAddresses, setBlacklistedAddresses] = useState([]);
-  const [blacklistedPhones, setBlacklistedPhones] = useState([]);
-  const [blacklistLoading, setBlacklistLoading] = useState(false);
-  const [blacklistMessage, setBlacklistMessage] = useState('');
-  const [blacklistMessageType, setBlacklistMessageType] = useState('');
-  const [blacklistAddressSuggestions, setBlacklistAddressSuggestions] = useState([]);
-  const [showBlacklistSuggestions, setShowBlacklistSuggestions] = useState(false);
-  const blacklistAddressRef = useRef(null);
-  const [viewerTab, setViewerTab] = useState('addresses');
-  
-  const [pickupSuggestions, setPickupSuggestions] = useState([]);
-  const [dropoffSuggestions, setDropoffSuggestions] = useState([[]]);
-  const [showPickupSuggestions, setShowPickupSuggestions] = useState(false);
-  const [showDropoffSuggestions, setShowDropoffSuggestions] = useState([false]);
-  const pickupRef = useRef(null);
-  const dropoffRefs = useRef([]);
-  const autocompleteService = useRef(null);
 
-  const BCS_CENTER = { lat: 30.6280, lng: -96.3344 };
-  const VALID_ZIP_CODES = ['77801', '77802', '77803', '77807', '77808', '77840', '77841', '77842', '77843', '77844', '77845'];
-  const VALID_CITIES = ['bryan', 'college station', 'college-station'];
-
-  const getMockBCSAddresses = (input) => {
-    return MOCK_BCS_ADDRESSES.filter(addr =>
-      addr.toLowerCase().includes(input.toLowerCase())
-    );
-  };
-
-  // NEW: Load common locations from tonight's rides
-  useEffect(() => {
-    if (!activeNDR) return;
-
-    const ridesRef = collection(db, 'rides');
-    const ridesQuery = query(ridesRef, where('ndrId', '==', activeNDR.id));
-
-    const unsubscribe = onSnapshot(ridesQuery, (snapshot) => {
-      const locations = {};
-      
-      snapshot.docs.forEach(doc => {
-        const data = doc.data();
-        
-        // Count pickups
-        if (data.pickup) {
-          locations[data.pickup] = (locations[data.pickup] || 0) + 1;
-        }
-        
-        // Count dropoffs
-        if (data.dropoffs) {
-          data.dropoffs.forEach(dropoff => {
-            locations[dropoff] = (locations[dropoff] || 0) + 1;
-          });
-        } else if (data.dropoff) {
-          locations[data.dropoff] = (locations[data.dropoff] || 0) + 1;
-        }
-      });
-
-      // Sort by frequency and take top 10
-      const sortedLocations = Object.entries(locations)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 10)
-        .map(([address, count]) => ({ address, count }));
-
-      setCommonLocations(sortedLocations);
-    });
-
-    return () => unsubscribe();
-  }, [activeNDR]);
-
-  // NEW: Check for duplicate caller when phone number is fully formatted
-  useEffect(() => {
-    const checkDuplicateCaller = async () => {
-      // Only check when phone is fully formatted (###) ###-####
-      if (!activeNDR || !formData.phone || formData.phone.length !== 14) {
-        setDuplicateCallerWarning(null);
-        return;
-      }
-
-      try {
-        const ridesRef = collection(db, 'rides');
-        const ridesQuery = query(
-          ridesRef,
-          where('ndrId', '==', activeNDR.id),
-          where('phone', '==', formData.phone)
-        );
-
-        const snapshot = await getDocs(ridesQuery);
-
-        if (!snapshot.empty) {
-          const previousRides = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data(),
-            requestedAt: doc.data().requestedAt?.toDate()
-          }));
-
-          setDuplicateCallerWarning({
-            count: previousRides.length,
-            rides: previousRides
-          });
-        } else {
-          setDuplicateCallerWarning(null);
-        }
-      } catch (error) {
-        devError('Error checking duplicate caller:', error);
-      }
-    };
-
-    // Only trigger check when phone is fully formatted
-    if (formData.phone.length === 14) {
-      const debounce = setTimeout(checkDuplicateCaller, 300);
-      return () => clearTimeout(debounce);
-    } else {
-      setDuplicateCallerWarning(null);
-    }
-  }, [formData.phone, activeNDR]);
-
-  // NEW: Calculate estimated wait time using REAL routing with FULL QUEUE SIMULATION
-  useEffect(() => {
-    const calculateWaitTime = async () => {
-      if (!activeNDR || !formData.pickup) {
-        setEstimatedWaitTime(null);
-        return;
-      }
-
-      // If Google Maps not loaded, use simple fallback
-      if (!isLoaded || !window.google) {
-        devLog('Google Maps not loaded, using fallback calculation');
-        setCalculatingWait(true);
-        
-        try {
-          const ridesRef = collection(db, 'rides');
-          const pendingQuery = query(
-            ridesRef,
-            where('ndrId', '==', activeNDR.id),
-            where('status', '==', 'pending')
-          );
-          const pendingSnapshot = await getDocs(pendingQuery);
-          const pendingCount = pendingSnapshot.size;
-          
-          const availableCars = activeNDR.availableCars || 0;
-          const avgWait = 15 + (pendingCount * 3);
-          
-          setEstimatedWaitTime({
-            min: Math.max(10, avgWait - 5),
-            max: avgWait + 10,
-            pendingCount,
-            availableCars,
-            freeCars: 0,
-            fallback: true,
-            reason: 'Google Maps unavailable'
-          });
-        } catch (error) {
-          devError('Error in fallback calculation:', error);
-          setEstimatedWaitTime({
-            min: 15,
-            max: 30,
-            pendingCount: 0,
-            availableCars: activeNDR.availableCars || 0,
-            freeCars: 0,
-            fallback: true
-          });
-        } finally {
-          setCalculatingWait(false);
-        }
-        return;
-      }
-
-      setCalculatingWait(true);
-
-      try {
-        const directionsService = new window.google.maps.DirectionsService();
-        const ridesRef = collection(db, 'rides');
-        
-        // Get pending rides IN ORDER (oldest first - this is the queue)
-        const pendingQuery = query(
-          ridesRef,
-          where('ndrId', '==', activeNDR.id),
-          where('status', '==', 'pending')
-        );
-        const pendingSnapshot = await getDocs(pendingQuery);
-        const pendingRides = pendingSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data(),
-          requestedAt: doc.data().requestedAt?.toDate() || new Date()
-        })).sort((a, b) => a.requestedAt - b.requestedAt); // Oldest first = queue order
-
-        const pendingCount = pendingRides.length;
-
-        // Get active rides with full route info
-        const activeQuery = query(
-          ridesRef,
-          where('ndrId', '==', activeNDR.id),
-          where('status', '==', 'active')
-        );
-        const activeSnapshot = await getDocs(activeQuery);
-        
-        // Get car locations
-        const carLocationsRef = collection(db, 'carLocations');
-        const carLocationsQuery = query(
-          carLocationsRef,
-          where('ndrId', '==', activeNDR.id)
-        );
-        const carLocationsSnapshot = await getDocs(carLocationsQuery);
-        const carLocations = {};
-        carLocationsSnapshot.docs.forEach(doc => {
-          const data = doc.data();
-          carLocations[data.carNumber] = data;
-        });
-
-        const availableCars = activeNDR.availableCars || 0;
-        const activeRides = activeSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-
-        devLog(`🚗 Simulating queue: ${pendingCount} pending rides, ${availableCars} cars`);
-
-        // Helper function to route a full ride
-        const routeFullRide = async (origin, ride) => {
-          try {
-            const waypoints = [];
-            const dropoffs = ride.dropoffs || [ride.dropoff];
-            
-            // Add pickup as waypoint
-            waypoints.push({ location: ride.pickup, stopover: true });
-            
-            // Add intermediate dropoffs as waypoints
-            dropoffs.slice(0, -1).forEach(dropoff => {
-              waypoints.push({ location: dropoff, stopover: true });
-            });
-
-            const finalDropoff = dropoffs[dropoffs.length - 1];
-
-            const result = await new Promise((resolve, reject) => {
-              directionsService.route(
-                {
-                  origin: origin,
-                  destination: finalDropoff,
-                  waypoints: waypoints,
-                  travelMode: window.google.maps.TravelMode.DRIVING,
-                  drivingOptions: {
-                    departureTime: new Date(),
-                    trafficModel: 'bestguess'
-                  }
-                },
-                (result, status) => {
-                  if (status === 'OK') resolve(result);
-                  else reject(status);
-                }
-              );
-            });
-
-            let totalTime = 0;
-            result.routes[0].legs.forEach(leg => {
-              const duration = leg.duration_in_traffic || leg.duration;
-              totalTime += duration.value;
-            });
-
-            // Add 2 min buffer per stop (pickup + each dropoff)
-            const bufferMinutes = (waypoints.length + 1) * 2;
-            const totalMinutes = Math.ceil(totalTime / 60) + bufferMinutes;
-
-            return { minutes: totalMinutes, finalLocation: finalDropoff };
-          } catch (error) {
-            devError('Error routing ride:', error);
-            // Fallback: 20 min average
-            const dropoffs = ride.dropoffs || [ride.dropoff];
-            return { 
-              minutes: 20, 
-              finalLocation: dropoffs[dropoffs.length - 1]
-            };
-          }
-        };
-
-        // Initialize car availability tracking
-        const carTimeline = [];
-
-        // STEP 1: Calculate when each car finishes its CURRENT active ride
-        for (let carNum = 1; carNum <= availableCars; carNum++) {
-          const activeRide = activeRides.find(r => r.carNumber === carNum);
-          const location = carLocations[carNum];
-
-          if (!activeRide) {
-            // Car is FREE - ready now
-            carTimeline.push({
-              carNumber: carNum,
-              availableAt: 0, // Available immediately
-              currentLocation: location && location.latitude ? 
-                { lat: location.latitude, lng: location.longitude } : 
-                null
-            });
-          } else {
-            // Car is BUSY - calculate time to finish current ride
-            try {
-              const waypoints = [];
-              const dropoffs = activeRide.dropoffs || [activeRide.dropoff];
-              
-              let origin;
-              if (activeRide.pickedUpAt) {
-                // Already picked up, heading to dropoffs
-                origin = activeRide.pickup;
-              } else if (location && location.latitude && location.longitude) {
-                // En route to pickup
-                origin = { lat: location.latitude, lng: location.longitude };
-                waypoints.push({ location: activeRide.pickup, stopover: true });
-              } else {
-                // No location, use pickup
-                origin = activeRide.pickup;
-              }
-
-              // Add dropoffs
-              dropoffs.forEach((dropoff, idx) => {
-                if (idx < dropoffs.length - 1) {
-                  waypoints.push({ location: dropoff, stopover: true });
-                }
-              });
-
-              const finalDropoff = dropoffs[dropoffs.length - 1];
-
-              const currentRouteResult = await new Promise((resolve, reject) => {
-                directionsService.route(
-                  {
-                    origin: origin,
-                    destination: finalDropoff,
-                    waypoints: waypoints,
-                    travelMode: window.google.maps.TravelMode.DRIVING,
-                    drivingOptions: {
-                      departureTime: new Date(),
-                      trafficModel: 'bestguess'
-                    }
-                  },
-                  (result, status) => {
-                    if (status === 'OK') resolve(result);
-                    else reject(status);
-                  }
-                );
-              });
-
-              let totalCurrentRouteTime = 0;
-              currentRouteResult.routes[0].legs.forEach(leg => {
-                const duration = leg.duration_in_traffic || leg.duration;
-                totalCurrentRouteTime += duration.value;
-              });
-
-              const bufferMinutes = (waypoints.length + 1) * 2;
-              const currentRouteMinutes = Math.ceil(totalCurrentRouteTime / 60) + bufferMinutes;
-
-              carTimeline.push({
-                carNumber: carNum,
-                availableAt: currentRouteMinutes,
-                currentLocation: finalDropoff
-              });
-            } catch (error) {
-              devError(`Error routing current ride for car ${carNum}:`, error);
-              const dropoffs = activeRide.dropoffs || [activeRide.dropoff];
-              carTimeline.push({
-                carNumber: carNum,
-                availableAt: 30, // Fallback estimate
-                currentLocation: dropoffs[dropoffs.length - 1]
-              });
-            }
-          }
-        }
-
-        devLog('📊 Initial car availability:', carTimeline);
-
-        // STEP 2: Simulate dispatching ALL pending rides in queue order
-        for (let i = 0; i < pendingRides.length; i++) {
-          const ride = pendingRides[i];
-          
-          // Find the car that will be available soonest
-          carTimeline.sort((a, b) => a.availableAt - b.availableAt);
-          const nextCar = carTimeline[0];
-
-          devLog(`📋 Queue ${i+1}/${pendingCount}: Assigning to Car ${nextCar.carNumber} (available in ${nextCar.availableAt} min)`);
-
-          // Calculate route from car's next location to this ride
-          const origin = nextCar.currentLocation || formData.pickup; // Fallback if no location
-          const rideResult = await routeFullRide(origin, ride);
-
-          // Update this car's availability
-          nextCar.availableAt += rideResult.minutes;
-          nextCar.currentLocation = rideResult.finalLocation;
-
-          devLog(`  → Ride takes ${rideResult.minutes} min, car available again at ${nextCar.availableAt} min`);
-        }
-
-        devLog('📊 After processing queue:', carTimeline);
-
-        // STEP 3: Now calculate time to reach the NEW caller's pickup
-        const finalCarTimeline = [];
-        
-        for (const car of carTimeline) {
-          try {
-            const result = await new Promise((resolve, reject) => {
-              directionsService.route(
-                {
-                  origin: car.currentLocation || formData.pickup,
-                  destination: formData.pickup,
-                  travelMode: window.google.maps.TravelMode.DRIVING,
-                  drivingOptions: {
-                    departureTime: new Date(Date.now() + car.availableAt * 60000),
-                    trafficModel: 'bestguess'
-                  }
-                },
-                (result, status) => {
-                  if (status === 'OK') resolve(result);
-                  else reject(status);
-                }
-              );
-            });
-
-            const toNewPickupDuration = result.routes[0].legs[0].duration_in_traffic || result.routes[0].legs[0].duration;
-            const toNewPickupMinutes = Math.ceil(toNewPickupDuration.value / 60);
-
-            const totalAvailableInMinutes = car.availableAt + toNewPickupMinutes;
-
-            finalCarTimeline.push({
-              carNumber: car.carNumber,
-              availableInMinutes: totalAvailableInMinutes
-            });
-
-            devLog(`🚗 Car ${car.carNumber}: Free at ${car.availableAt} min + ${toNewPickupMinutes} min drive = ${totalAvailableInMinutes} min total`);
-          } catch (error) {
-            devError(`Error routing to new pickup for car ${car.carNumber}:`, error);
-            finalCarTimeline.push({
-              carNumber: car.carNumber,
-              availableInMinutes: car.availableAt + 10 // Fallback
-            });
-          }
-        }
-
-        // Find the fastest car
-        if (finalCarTimeline.length > 0) {
-          finalCarTimeline.sort((a, b) => a.availableInMinutes - b.availableInMinutes);
-          const fastestCar = finalCarTimeline[0];
-          
-          const estimatedMinutes = fastestCar.availableInMinutes;
-          const minWait = Math.max(5, estimatedMinutes - 3);
-          const maxWait = estimatedMinutes + 5;
-
-          devLog(`✅ Final result: Car ${fastestCar.carNumber} arrives in ${estimatedMinutes} min (${minWait}-${maxWait} min range)`);
-
-          setEstimatedWaitTime({
-            min: minWait,
-            max: maxWait,
-            pendingCount,
-            availableCars,
-            freeCars: carTimeline.filter(c => c.availableAt === 0).length,
-            fastestCar: fastestCar.carNumber,
-            usingRealRouting: true,
-            queueSimulated: true
-          });
-        } else {
-          // Fallback if no cars
-          setEstimatedWaitTime({
-            min: 15,
-            max: 25,
-            pendingCount,
-            availableCars,
-            freeCars: 0
-          });
-        }
-      } catch (error) {
-        devError('Error calculating wait time:', error);
-        // Fallback calculation - fetch pending count separately
-        try {
-          const ridesRef = collection(db, 'rides');
-          const pendingQuery = query(
-            ridesRef,
-            where('ndrId', '==', activeNDR.id),
-            where('status', '==', 'pending')
-          );
-          const pendingSnapshot = await getDocs(pendingQuery);
-          const pendingCount = pendingSnapshot.size;
-          const avgWait = 15 + (pendingCount * 5);
-          
-          setEstimatedWaitTime({
-            min: Math.max(10, avgWait - 5),
-            max: avgWait + 10,
-            pendingCount,
-            availableCars: activeNDR.availableCars || 0,
-            freeCars: 0,
-            fallback: true
-          });
-        } catch (fallbackError) {
-          devError('Error in fallback calculation:', fallbackError);
-          // Ultimate fallback - just show generic estimate
-          setEstimatedWaitTime({
-            min: 15,
-            max: 30,
-            pendingCount: 0,
-            availableCars: activeNDR.availableCars || 0,
-            freeCars: 0,
-            fallback: true
-          });
-        }
-      } finally {
-        setCalculatingWait(false);
-      }
-    };
-
-    const debounce = setTimeout(calculateWaitTime, 1500);
-    return () => clearTimeout(debounce);
-  }, [formData.pickup, activeNDR, isLoaded]);
+  // Use extracted hooks
+  const commonLocations = useCommonLocations(activeNDR);
+  const duplicateCallerWarning = useDuplicateCaller(formData.phone, activeNDR);
+  const { estimatedWaitTime, calculatingWait } = useWaitTime(formData.pickup, activeNDR, isLoaded);
+  const {
+    blacklistedAddresses,
+    blacklistedPhones,
+    getActiveBlacklists,
+    checkBlacklist
+  } = useBlacklist(activeNDR);
 
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(user => {
@@ -602,198 +83,19 @@ const PhoneRoom = () => {
     return () => unsubscribe();
   }, []);
 
-  useEffect(() => {
-    if (isLoaded && window.google) {
-      autocompleteService.current = new window.google.maps.places.AutocompleteService();
-    }
-  }, [isLoaded]);
-
-  useEffect(() => {
-    const addressBlacklistQuery = query(
-      collection(db, 'addressBlacklist'),
-      where('status', '==', 'approved')
-    );
-
-    const unsubscribe = onSnapshot(addressBlacklistQuery, (snapshot) => {
-      const addresses = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setBlacklistedAddresses(addresses);
-    });
-
-    return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    const phoneBlacklistQuery = query(
-      collection(db, 'phoneBlacklist'),
-      where('status', '==', 'approved')
-    );
-
-    const unsubscribe = onSnapshot(phoneBlacklistQuery, (snapshot) => {
-      const phones = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setBlacklistedPhones(phones);
-    });
-
-    return () => unsubscribe();
-  }, []);
-
-  // Use useCallback to prevent memory leaks from frequent event listener changes
-  const handleClickOutside = useCallback((event) => {
-    if (pickupRef.current && !pickupRef.current.contains(event.target)) {
-      setShowPickupSuggestions(false);
-      setShowCommonPickups(false);
-    }
-
-    dropoffRefs.current.forEach((ref, index) => {
-      if (ref && !ref.contains(event.target)) {
-        setShowDropoffSuggestions(prev => {
-          const newShowSuggestions = [...prev];
-          newShowSuggestions[index] = false;
-          return newShowSuggestions;
-        });
-
-        setShowCommonDropoffs(prev => {
-          const newShowCommon = [...prev];
-          newShowCommon[index] = false;
-          return newShowCommon;
-        });
-      }
-    });
-
-    if (blacklistAddressRef.current && !blacklistAddressRef.current.contains(event.target)) {
-      setShowBlacklistSuggestions(false);
-    }
-  }, []); // Empty deps - refs are stable
-
-  useEffect(() => {
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [handleClickOutside]);
-
-  const fetchAddressSuggestions = (input, callback) => {
-    if (!input || input.length < 3) {
-      callback([]);
-      return;
-    }
-
-    if (!isLoaded || !autocompleteService.current) {
-      const mockResults = getMockBCSAddresses(input);
-      callback(mockResults);
-      return;
-    }
-
-    autocompleteService.current.getPlacePredictions(
-      {
-        input,
-        location: new window.google.maps.LatLng(BCS_CENTER.lat, BCS_CENTER.lng),
-        radius: 20000,
-        componentRestrictions: { country: 'us' }
-      },
-      (predictions, status) => {
-        if (status === window.google.maps.places.PlacesServiceStatus.OK && predictions) {
-          const filteredPredictions = predictions
-            .map(p => p.description)
-            .filter(desc => {
-              const lower = desc.toLowerCase();
-              return VALID_ZIP_CODES.some(zip => lower.includes(zip)) ||
-                     VALID_CITIES.some(city => lower.includes(city));
-            });
-          callback(filteredPredictions);
-        } else {
-          const mockResults = getMockBCSAddresses(input);
-          callback(mockResults);
-        }
-      }
-    );
+  // Address validation helper
+  const validateAddress = (address) => {
+    const addressLower = address.toLowerCase();
+    return VALID_ZIP_CODES.some(zip => address.includes(zip)) ||
+           VALID_CITIES.some(city => addressLower.includes(city));
   };
 
-  const handlePickupChange = (value) => {
-    setFormData({ ...formData, pickup: value });
-    
-    if (value.length >= 3) {
-      fetchAddressSuggestions(value, (suggestions) => {
-        setPickupSuggestions(suggestions);
-        setShowPickupSuggestions(true);
-        setShowCommonPickups(false);
-      });
-    } else {
-      setPickupSuggestions([]);
-      setShowPickupSuggestions(false);
-    }
-  };
-
-  const selectPickupSuggestion = (address) => {
-    setFormData({ ...formData, pickup: address });
-    setShowPickupSuggestions(false);
-    setShowCommonPickups(false);
-    setPickupSuggestions([]);
-  };
-
-  const handleDropoffChange = (index, value) => {
-    const newDropoffs = [...formData.dropoffs];
-    newDropoffs[index] = value;
-    setFormData({ ...formData, dropoffs: newDropoffs });
-    
-    fetchAddressSuggestions(value, (suggestions) => {
-      const newSuggestions = [...dropoffSuggestions];
-      newSuggestions[index] = suggestions;
-      setDropoffSuggestions(newSuggestions);
-    });
-    
-    const newShowSuggestions = [...showDropoffSuggestions];
-    newShowSuggestions[index] = true;
-    setShowDropoffSuggestions(newShowSuggestions);
-    
-    const newShowCommon = [...showCommonDropoffs];
-    newShowCommon[index] = false;
-    setShowCommonDropoffs(newShowCommon);
-  };
-
-  const selectDropoffSuggestion = (index, address) => {
-    const newDropoffs = [...formData.dropoffs];
-    newDropoffs[index] = address;
-    setFormData({ ...formData, dropoffs: newDropoffs });
-    
-    const newShowSuggestions = [...showDropoffSuggestions];
-    newShowSuggestions[index] = false;
-    setShowDropoffSuggestions(newShowSuggestions);
-    
-    const newSuggestions = [...dropoffSuggestions];
-    newSuggestions[index] = [];
-    setDropoffSuggestions(newSuggestions);
-    
-    const newShowCommon = [...showCommonDropoffs];
-    newShowCommon[index] = false;
-    setShowCommonDropoffs(newShowCommon);
-  };
-
-  const addDropoff = () => {
-    setFormData({
-      ...formData,
-      dropoffs: [...formData.dropoffs, '']
-    });
-    setDropoffSuggestions([...dropoffSuggestions, []]);
-    setShowDropoffSuggestions([...showDropoffSuggestions, false]);
-    setShowCommonDropoffs([...showCommonDropoffs, false]);
-  };
-
-  const removeDropoff = (index) => {
-    if (formData.dropoffs.length === 1) return;
-    
-    const newDropoffs = formData.dropoffs.filter((_, i) => i !== index);
-    const newSuggestions = dropoffSuggestions.filter((_, i) => i !== index);
-    const newShowSuggestions = showDropoffSuggestions.filter((_, i) => i !== index);
-    const newShowCommon = showCommonDropoffs.filter((_, i) => i !== index);
-    
-    setFormData({ ...formData, dropoffs: newDropoffs });
-    setDropoffSuggestions(newSuggestions);
-    setShowDropoffSuggestions(newShowSuggestions);
-    setShowCommonDropoffs(newShowCommon);
+  // Address normalization for blacklist checking
+  const normalizeAddress = (addr) => {
+    return addr.toLowerCase()
+      .replace(/\s+/g, ' ')
+      .replace(/[.,]/g, '')
+      .trim();
   };
 
   const handleSubmit = async () => {
@@ -818,12 +120,6 @@ const PhoneRoom = () => {
     }
 
     // Validate addresses are in Bryan/College Station area
-    const validateAddress = (address) => {
-      const addressLower = address.toLowerCase();
-      return VALID_ZIP_CODES.some(zip => address.includes(zip)) ||
-             VALID_CITIES.some(city => addressLower.includes(city));
-    };
-
     if (!validateAddress(formData.pickup)) {
       setMessage('Pickup address must be in Bryan/College Station area');
       setMessageType('error');
@@ -843,6 +139,7 @@ const PhoneRoom = () => {
     setMessageType('info');
 
     try {
+      // Check phone blacklist
       const phoneBlacklistRef = collection(db, 'phoneBlacklist');
       const phoneBlacklistQuery = query(
         phoneBlacklistRef,
@@ -850,7 +147,7 @@ const PhoneRoom = () => {
         where('status', '==', 'approved')
       );
       const phoneSnapshot = await getDocs(phoneBlacklistQuery);
-      
+
       const activePhoneBlacklist = getActiveBlacklists(
         phoneSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })),
         'phone'
@@ -863,15 +160,7 @@ const PhoneRoom = () => {
         return;
       }
 
-      // Improved blacklist matching - normalize and compare addresses
-      const normalizeAddress = (addr) => {
-        return addr.toLowerCase()
-          .replace(/\s+/g, ' ')
-          .replace(/[.,]/g, '')
-          .trim();
-      };
-
-      const addressBlacklistRef = collection(db, 'addressBlacklist');
+      // Check address blacklist
       const activeAddressBlacklist = getActiveBlacklists(blacklistedAddresses, 'address');
 
       for (const item of activeAddressBlacklist) {
@@ -879,7 +168,6 @@ const PhoneRoom = () => {
 
         if (item.appliesToPickup) {
           const pickupAddr = normalizeAddress(formData.pickup);
-          // Check if blacklisted address is a substring OR if pickup is very similar
           if (pickupAddr.includes(blacklistedAddr) || blacklistedAddr.includes(pickupAddr)) {
             setMessage(`Pickup location is blacklisted: ${item.reason}`);
             setMessageType('error');
@@ -917,7 +205,7 @@ const PhoneRoom = () => {
 
       setMessage('Ride request submitted successfully!');
       setMessageType('success');
-      
+
       setFormData({
         name: '',
         phone: '',
@@ -925,8 +213,6 @@ const PhoneRoom = () => {
         dropoffs: [''],
         riders: 1
       });
-      setDuplicateCallerWarning(null);
-      setEstimatedWaitTime(null);
 
       setTimeout(() => {
         setMessage('');
@@ -939,98 +225,6 @@ const PhoneRoom = () => {
       setMessageType('error');
     } finally {
       setSubmitLoading(false);
-    }
-  };
-
-  const handleBlacklistValueChange = (value) => {
-    setBlacklistRequest({ ...blacklistRequest, value });
-    
-    if (blacklistRequest.type === 'address' && value.length >= 3) {
-      fetchAddressSuggestions(value, (suggestions) => {
-        setBlacklistAddressSuggestions(suggestions);
-      });
-    }
-  };
-
-  const selectBlacklistAddressSuggestion = (address) => {
-    setBlacklistRequest({ ...blacklistRequest, value: address });
-    setShowBlacklistSuggestions(false);
-    setBlacklistAddressSuggestions([]);
-  };
-
-  const submitBlacklistRequest = async (e) => {
-    e.preventDefault();
-
-    if (!blacklistRequest.value || !blacklistRequest.reason) {
-      setBlacklistMessage('Please fill in all required fields');
-      setBlacklistMessageType('error');
-      return;
-    }
-
-    setBlacklistLoading(true);
-    setBlacklistMessage('');
-
-    try {
-      const collectionName = blacklistRequest.type === 'address' ? 'addressBlacklist' : 'phoneBlacklist';
-
-      // Check for duplicates
-      const duplicateQuery = query(
-        collection(db, collectionName),
-        where(blacklistRequest.type === 'address' ? 'address' : 'phone', '==', blacklistRequest.value)
-      );
-      const duplicateSnapshot = await getDocs(duplicateQuery);
-
-      if (!duplicateSnapshot.empty) {
-        const existing = duplicateSnapshot.docs[0].data();
-        setBlacklistMessage(`This ${blacklistRequest.type} is already blacklisted (Status: ${existing.status})`);
-        setBlacklistMessageType('error');
-        setBlacklistLoading(false);
-        return;
-      }
-
-      const requestData = {
-        [blacklistRequest.type === 'address' ? 'address' : 'phone']: blacklistRequest.value,
-        reason: blacklistRequest.reason,
-        scope: blacklistRequest.scope,
-        status: 'pending',
-        requestedAt: Timestamp.now(),
-        requestedBy: currentUser?.uid || 'anonymous',
-        requestedByName: currentUser?.displayName || 'Staff Member'
-      };
-
-      if (blacklistRequest.type === 'address') {
-        requestData.appliesToPickup = blacklistRequest.appliesToPickup;
-        requestData.appliesToDropoff = blacklistRequest.appliesToDropoff;
-      }
-
-      if (blacklistRequest.scope === 'temporary') {
-        requestData.ndrId = activeNDR.id;
-      }
-
-      await addDoc(collection(db, collectionName), requestData);
-
-      setBlacklistMessage('Blacklist request submitted! Waiting for director approval.');
-      setBlacklistMessageType('success');
-
-      setTimeout(() => {
-        setBlacklistRequest({
-          type: 'address',
-          value: '',
-          reason: '',
-          scope: 'permanent',
-          appliesToPickup: true,
-          appliesToDropoff: true
-        });
-        setShowBlacklistModal(false);
-        setBlacklistMessage('');
-        setBlacklistMessageType('');
-      }, 2000);
-    } catch (error) {
-      devError('Error submitting blacklist request:', error);
-      setBlacklistMessage('Error submitting request: ' + error.message);
-      setBlacklistMessageType('error');
-    } finally {
-      setBlacklistLoading(false);
     }
   };
 
@@ -1092,7 +286,7 @@ const PhoneRoom = () => {
           </div>
         </div>
       </div>
-      
+
       <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
         <div className="bg-[#79F200] p-6">
           <div className="flex items-center gap-3">
@@ -1138,8 +332,8 @@ const PhoneRoom = () => {
 
           {message && (
             <div className={`mb-6 p-4 rounded-xl flex items-start gap-3 ${
-              messageType === 'error' 
-                ? 'bg-red-50 border border-red-200' 
+              messageType === 'error'
+                ? 'bg-red-50 border border-red-200'
                 : messageType === 'success'
                 ? 'bg-green-50 border border-green-200'
                 : 'bg-blue-50 border border-blue-200'
@@ -1191,79 +385,17 @@ const PhoneRoom = () => {
               />
             </div>
 
-            {/* NEW: Duplicate Caller Warning */}
+            {/* Use extracted DuplicateCallerWarning component */}
             {duplicateCallerWarning && (
-              <div className="bg-red-50 border-2 border-red-500 rounded-xl p-4 animate-pulse">
-                <div className="flex items-start gap-3">
-                  <AlertTriangle className="text-red-600 flex-shrink-0 mt-0.5" size={24} />
-                  <div className="flex-1">
-                    <p className="font-bold text-red-900 text-lg mb-2">
-                      ⚠️ DUPLICATE CALLER DETECTED
-                    </p>
-                    <p className="text-red-800 font-semibold mb-2">
-                      This phone number has already requested {duplicateCallerWarning.count} ride{duplicateCallerWarning.count > 1 ? 's' : ''} tonight:
-                    </p>
-                    <div className="space-y-2">
-                      {duplicateCallerWarning.rides.map((ride, idx) => (
-                        <div key={idx} className="bg-white rounded-lg p-3 border border-red-300">
-                          <p className="text-sm font-semibold text-gray-900">
-                            {ride.patronName} - {ride.requestedAt?.toLocaleTimeString()}
-                          </p>
-                          <p className="text-sm text-gray-700">
-                            Status: <span className="font-bold capitalize">{ride.status}</span>
-                          </p>
-                          {ride.status === 'cancelled' && ride.cancellationReason && (
-                            <p className="text-xs text-gray-600">
-                              Cancelled: {ride.cancellationReason}
-                            </p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                    <p className="text-red-900 font-bold mt-3 text-sm">
-                      🚫 POLICY: Only ONE ride request per person per night
-                    </p>
-                  </div>
-                </div>
-              </div>
+              <DuplicateCallerWarning duplicateCallerWarning={duplicateCallerWarning} />
             )}
 
-            {/* NEW: Estimated Wait Time with Real Routing */}
+            {/* Use extracted EstimatedWaitTime component */}
             {estimatedWaitTime && !duplicateCallerWarning && (
-              <div className="bg-blue-50 border-2 border-blue-400 rounded-xl p-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Clock size={24} className="text-blue-600" />
-                    <div>
-                      <p className="text-xs font-semibold text-blue-800 uppercase flex items-center gap-2">
-                        Estimated Wait Time
-                        {estimatedWaitTime.usingRealRouting && (
-                          <span className="bg-green-500 text-white text-[10px] px-2 py-0.5 rounded-full">
-                            LIVE ROUTING
-                          </span>
-                        )}
-                        {estimatedWaitTime.fallback && (
-                          <span className="bg-yellow-500 text-white text-[10px] px-2 py-0.5 rounded-full">
-                            ESTIMATE
-                          </span>
-                        )}
-                      </p>
-                      <p className="text-2xl font-bold text-blue-900">
-                        {estimatedWaitTime.min}-{estimatedWaitTime.max} minutes
-                      </p>
-                      {estimatedWaitTime.fastestCar && (
-                        <p className="text-xs text-blue-700 mt-1">
-                          Fastest: Car {estimatedWaitTime.fastestCar}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-xs text-blue-700">In Queue: {estimatedWaitTime.pendingCount}</p>
-                    <p className="text-xs text-blue-700">Free Cars: {estimatedWaitTime.freeCars}/{estimatedWaitTime.availableCars}</p>
-                  </div>
-                </div>
-              </div>
+              <EstimatedWaitTime
+                estimatedWaitTime={estimatedWaitTime}
+                calculatingWait={calculatingWait}
+              />
             )}
 
             {calculatingWait && !estimatedWaitTime && (
@@ -1273,169 +405,25 @@ const PhoneRoom = () => {
               </div>
             )}
 
-            <div className="relative" ref={pickupRef}>
-              <label className="block text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
-                <MapPin size={16} />
-                Pickup Location
-              </label>
-              <input
-                type="text"
-                inputMode="text"
-                autoComplete="street-address"
-                value={formData.pickup}
-                onChange={(e) => handlePickupChange(e.target.value)}
-                onFocus={() => {
-                  if (commonLocations.length > 0 && !formData.pickup) {
-                    setShowCommonPickups(true);
-                  }
-                }}
-                className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-[#79F200] focus:border-[#79F200] transition outline-none text-gray-900"
-                placeholder="Start typing address..."
-              />
-              
-              {/* NEW: Common Pickups */}
-              {showCommonPickups && commonLocations.length > 0 && (
-                <div className="absolute z-10 w-full mt-2 bg-white border-2 border-[#79F200] rounded-xl shadow-2xl max-h-48 md:max-h-64 lg:max-h-80 overflow-y-auto">
-                  <div className="p-3 bg-[#79F200] sticky top-0">
-                    <p className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                      <TrendingUp size={16} />
-                      Common Locations Tonight
-                    </p>
-                  </div>
-                  {commonLocations.map((location, index) => (
-                    <div
-                      key={index}
-                      onClick={() => {
-                        selectPickupSuggestion(location.address);
-                        setShowCommonPickups(false);
-                      }}
-                      className="px-4 py-3 hover:bg-[#79F200]/20 cursor-pointer transition flex items-center justify-between border-b border-gray-100 last:border-0"
-                    >
-                      <div className="flex items-center gap-2 flex-1">
-                        <MapPin size={16} className="text-[#79F200] flex-shrink-0" />
-                        <span className="text-sm text-gray-900">{location.address}</span>
-                      </div>
-                      <span className="text-xs font-bold text-gray-600 bg-gray-200 px-2 py-1 rounded-full">
-                        {location.count}x
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              
-              {showPickupSuggestions && pickupSuggestions.length > 0 && (
-                <div className="absolute z-10 w-full mt-2 bg-white border-2 border-[#79F200] rounded-xl shadow-2xl max-h-40 md:max-h-56 lg:max-h-64 overflow-y-auto">
-                  {pickupSuggestions.map((suggestion, index) => (
-                    <div
-                      key={index}
-                      onClick={() => selectPickupSuggestion(suggestion)}
-                      className="px-4 py-3 hover:bg-[#79F200]/20 cursor-pointer transition flex items-center gap-2 border-b border-gray-100 last:border-0"
-                    >
-                      <MapPin size={16} className="text-[#79F200]" />
-                      <span className="text-sm text-gray-900">{suggestion}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* Use AddressAutocomplete component for pickup */}
+            <AddressAutocomplete
+              label="Pickup Location"
+              value={formData.pickup}
+              onChange={(value) => setFormData({ ...formData, pickup: value })}
+              commonLocations={commonLocations}
+              isLoaded={isLoaded}
+            />
 
+            {/* Use AddressAutocomplete component for dropoffs */}
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-2 flex items-center justify-between">
-                <span className="flex items-center gap-2">
-                  <MapPin size={16} />
-                  Dropoff Location(s)
-                </span>
-                <button
-                  type="button"
-                  onClick={addDropoff}
-                  className="px-3 py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg transition text-xs font-bold flex items-center gap-1"
-                >
-                  <Plus size={14} />
-                  Add Stop
-                </button>
-              </label>
-              
-              {formData.dropoffs.map((dropoff, index) => (
-                <div key={index} className="mb-3">
-                  <div className="flex gap-2">
-                    <div 
-                      className="relative flex-1"
-                      ref={(el) => (dropoffRefs.current[index] = el)}
-                    >
-                      <input
-                        type="text"
-                        value={dropoff}
-                        onChange={(e) => handleDropoffChange(index, e.target.value)}
-                        onFocus={() => {
-                          if (commonLocations.length > 0 && !dropoff) {
-                            const newShowCommon = [...showCommonDropoffs];
-                            newShowCommon[index] = true;
-                            setShowCommonDropoffs(newShowCommon);
-                          }
-                        }}
-                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-[#79F200] focus:border-[#79F200] transition outline-none text-gray-900"
-                        placeholder={`Dropoff ${formData.dropoffs.length > 1 ? index + 1 : ''} address...`}
-                      />
-                      
-                      {/* NEW: Common Dropoffs */}
-                      {showCommonDropoffs[index] && commonLocations.length > 0 && (
-                        <div className="absolute z-10 w-full mt-2 bg-white border-2 border-[#79F200] rounded-xl shadow-2xl max-h-48 md:max-h-64 lg:max-h-80 overflow-y-auto">
-                          <div className="p-3 bg-[#79F200] sticky top-0">
-                            <p className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                              <TrendingUp size={16} />
-                              Common Locations Tonight
-                            </p>
-                          </div>
-                          {commonLocations.map((location, locIndex) => (
-                            <div
-                              key={locIndex}
-                              onClick={() => {
-                                selectDropoffSuggestion(index, location.address);
-                                const newShowCommon = [...showCommonDropoffs];
-                                newShowCommon[index] = false;
-                                setShowCommonDropoffs(newShowCommon);
-                              }}
-                              className="px-4 py-3 hover:bg-[#79F200]/20 cursor-pointer transition flex items-center justify-between border-b border-gray-100 last:border-0"
-                            >
-                              <div className="flex items-center gap-2 flex-1">
-                                <MapPin size={16} className="text-[#79F200] flex-shrink-0" />
-                                <span className="text-sm text-gray-900">{location.address}</span>
-                              </div>
-                              <span className="text-xs font-bold text-gray-600 bg-gray-200 px-2 py-1 rounded-full">
-                                {location.count}x
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      
-                      {showDropoffSuggestions[index] && dropoffSuggestions[index]?.length > 0 && (
-                        <div className="absolute z-10 w-full mt-2 bg-white border-2 border-[#79F200] rounded-xl shadow-2xl max-h-40 md:max-h-56 lg:max-h-64 overflow-y-auto">
-                          {dropoffSuggestions[index].map((suggestion, suggestionIndex) => (
-                            <div
-                              key={suggestionIndex}
-                              onClick={() => selectDropoffSuggestion(index, suggestion)}
-                              className="px-4 py-3 hover:bg-[#79F200]/20 cursor-pointer transition flex items-center gap-2 border-b border-gray-100 last:border-0"
-                            >
-                              <MapPin size={16} className="text-[#79F200]" />
-                              <span className="text-sm text-gray-900">{suggestion}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    {formData.dropoffs.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => removeDropoff(index)}
-                        className="px-3 py-3 bg-red-100 hover:bg-red-200 text-red-700 rounded-xl transition flex items-center justify-center"
-                      >
-                        <X size={18} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
+              <AddressAutocomplete
+                label="Dropoff Location(s)"
+                value={formData.dropoffs}
+                onChange={(value) => setFormData({ ...formData, dropoffs: value })}
+                commonLocations={commonLocations}
+                isLoaded={isLoaded}
+                multiple={true}
+              />
             </div>
 
             <div>
@@ -1489,313 +477,28 @@ const PhoneRoom = () => {
         </div>
       </div>
 
-      {/* Blacklist Request Modal */}
+      {/* Use extracted BlacklistRequestModal component */}
       {showBlacklistModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
-            <div className="bg-gradient-to-r from-orange-500 to-red-500 p-6 rounded-t-2xl">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center">
-                    <AlertTriangle className="text-orange-500" size={24} />
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-bold text-white">Request Blacklist</h3>
-                    <p className="text-white/90 text-sm">Requires director approval</p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setShowBlacklistModal(false)}
-                  className="text-white hover:bg-white/20 rounded-lg p-2 transition"
-                >
-                  <X size={24} />
-                </button>
-              </div>
-            </div>
-
-            <div className="p-6 space-y-5">
-              <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
-                <p className="text-sm text-yellow-800">
-                  <strong>Note:</strong> This request will be pending until a director approves it.
-                  Only approved entries will be blocked.
-                </p>
-              </div>
-
-              {blacklistMessage && (
-                <div className={`p-4 rounded-xl flex items-start gap-3 ${
-                  blacklistMessageType === 'error'
-                    ? 'bg-red-50 border border-red-200'
-                    : 'bg-green-50 border border-green-200'
-                }`}>
-                  {blacklistMessageType === 'error' ? (
-                    <XCircle className="text-red-500 flex-shrink-0 mt-0.5" size={20} />
-                  ) : (
-                    <CheckCircle className="text-green-500 flex-shrink-0 mt-0.5" size={20} />
-                  )}
-                  <p className={`text-sm font-medium ${
-                    blacklistMessageType === 'error' ? 'text-red-700' : 'text-green-700'
-                  }`}>{blacklistMessage}</p>
-                </div>
-              )}
-
-              <form onSubmit={submitBlacklistRequest} className="space-y-5">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Type *
-                  </label>
-                  <select
-                    value={blacklistRequest.type}
-                    onChange={(e) => setBlacklistRequest({ ...blacklistRequest, type: e.target.value, value: '' })}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition outline-none text-gray-900"
-                  >
-                    <option value="address">Address</option>
-                    <option value="phone">Phone Number</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Scope *
-                  </label>
-                  <select
-                    value={blacklistRequest.scope}
-                    onChange={(e) => setBlacklistRequest({ ...blacklistRequest, scope: e.target.value })}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition outline-none text-gray-900"
-                  >
-                    <option value="permanent">Permanent (All events)</option>
-                    <option value="temporary">Temporary (This event only)</option>
-                  </select>
-                </div>
-
-                <div className="relative" ref={blacklistAddressRef}>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    {blacklistRequest.type === 'address' ? 'Address' : 'Phone Number'} *
-                  </label>
-                  <input
-                    type="text"
-                    value={blacklistRequest.value}
-                    onChange={(e) => {
-                      const value = blacklistRequest.type === 'phone' ? 
-                        formatPhoneNumber(e.target.value) : e.target.value;
-                      handleBlacklistValueChange(value);
-                    }}
-                    onFocus={() => blacklistRequest.type === 'address' && setShowBlacklistSuggestions(true)}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition outline-none text-gray-900"
-                    maxLength={blacklistRequest.type === 'phone' ? 14 : undefined}
-                    placeholder={blacklistRequest.type === 'address' ? 
-                      'Start typing address...' : 
-                      '(555) 123-4567'}
-                    required
-                  />
-                  
-                  {showBlacklistSuggestions && blacklistAddressSuggestions.length > 0 && (
-                    <div className="absolute z-10 w-full mt-2 bg-white border-2 border-orange-500 rounded-xl shadow-2xl max-h-64 overflow-y-auto">
-                      {blacklistAddressSuggestions.map((suggestion, index) => (
-                        <div
-                          key={index}
-                          onClick={() => selectBlacklistAddressSuggestion(suggestion)}
-                          className="px-4 py-3 hover:bg-orange-50 cursor-pointer transition flex items-center gap-2 border-b border-gray-100 last:border-0"
-                        >
-                          <MapPin size={16} className="text-orange-500" />
-                          <span className="text-sm text-gray-900">{suggestion}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {blacklistRequest.type === 'address' && (
-                  <div className="space-y-3">
-                    <label className="block text-sm font-semibold text-gray-700 mb-2">
-                      Apply To:
-                    </label>
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={blacklistRequest.appliesToPickup}
-                        onChange={(e) => setBlacklistRequest({ ...blacklistRequest, appliesToPickup: e.target.checked })}
-                        className="w-5 h-5 rounded border-gray-300"
-                      />
-                      <span className="text-sm text-gray-700">Pickup Locations</span>
-                    </label>
-                    <label className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={blacklistRequest.appliesToDropoff}
-                        onChange={(e) => setBlacklistRequest({ ...blacklistRequest, appliesToDropoff: e.target.checked })}
-                        className="w-5 h-5 rounded border-gray-300"
-                      />
-                      <span className="text-sm text-gray-700">Dropoff Locations</span>
-                    </label>
-                  </div>
-                )}
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Reason *
-                  </label>
-                  <textarea
-                    value={blacklistRequest.reason}
-                    onChange={(e) => setBlacklistRequest({ ...blacklistRequest, reason: e.target.value })}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition outline-none text-gray-900 min-h-24"
-                    placeholder="Explain why this should be blacklisted..."
-                    required
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={blacklistLoading}
-                  className="w-full py-3 bg-orange-500 hover:bg-orange-600 text-white rounded-xl transition font-bold disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {blacklistLoading ? (
-                    <>
-                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      Submitting...
-                    </>
-                  ) : (
-                    <>
-                      <Send size={18} />
-                      Submit Request
-                    </>
-                  )}
-                </button>
-              </form>
-            </div>
-          </div>
-        </div>
+        <BlacklistRequestModal
+          isOpen={showBlacklistModal}
+          onClose={() => setShowBlacklistModal(false)}
+          activeNDR={activeNDR}
+          currentUser={currentUser}
+          formatPhoneNumber={formatPhoneNumber}
+          isLoaded={isLoaded}
+        />
       )}
 
-      {/* Blacklist Viewer Modal */}
+      {/* Use extracted BlacklistViewerModal component */}
       {showBlacklistViewer && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="bg-gradient-to-r from-gray-800 to-gray-900 p-6">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center">
-                    <Shield className="text-gray-800" size={24} />
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-bold text-white">Active Blacklists</h3>
-                    <p className="text-white/90 text-sm">View currently blocked addresses and phone numbers</p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setShowBlacklistViewer(false)}
-                  className="text-white hover:bg-white/20 rounded-lg p-2 transition"
-                >
-                  <X size={24} />
-                </button>
-              </div>
-            </div>
-
-            {activeNDR && (
-              <div className="border-b border-gray-200 px-6 py-3 bg-gray-50">
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setViewerTab('addresses')}
-                    className={`px-4 py-2 rounded-lg font-semibold transition ${
-                      viewerTab === 'addresses'
-                        ? 'bg-white text-gray-900 shadow'
-                        : 'text-gray-600 hover:text-gray-900'
-                    }`}
-                  >
-                    Addresses ({getActiveBlacklists(blacklistedAddresses, 'address').filter(a => a.status === 'approved').length})
-                  </button>
-                  <button
-                    onClick={() => setViewerTab('phones')}
-                    className={`px-4 py-2 rounded-lg font-semibold transition ${
-                      viewerTab === 'phones'
-                        ? 'bg-white text-gray-900 shadow'
-                        : 'text-gray-600 hover:text-gray-900'
-                    }`}
-                  >
-                    Phone Numbers ({getActiveBlacklists(blacklistedPhones, 'phone').filter(p => p.status === 'approved').length})
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div className="flex-1 overflow-y-auto p-6">
-              {viewerTab === 'addresses' ? (
-                <div className="space-y-3">
-                  {getActiveBlacklists(blacklistedAddresses, 'address').filter(a => a.status === 'approved').length === 0 ? (
-                    <p className="text-center text-gray-500 py-8">No blocked addresses for this event</p>
-                  ) : (
-                    getActiveBlacklists(blacklistedAddresses, 'address')
-                      .filter(a => a.status === 'approved')
-                      .map((item) => (
-                        <div key={item.id} className="bg-gray-50 border border-gray-200 rounded-xl p-4">
-                          <div className="flex items-start justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <MapPin size={18} className="text-red-600 flex-shrink-0" />
-                              <p className="font-bold text-gray-900">{item.address}</p>
-                            </div>
-                            <span className={`text-xs font-bold px-2 py-1 rounded-full ${
-                              item.scope === 'temporary' ? 'bg-orange-100 text-orange-800' : 'bg-red-100 text-red-800'
-                            }`}>
-                              {item.scope === 'temporary' ? 'TEMP' : 'PERM'}
-                            </span>
-                          </div>
-                          <p className="text-sm text-gray-600 mb-2">
-                            <strong>Reason:</strong> {item.reason}
-                          </p>
-                          <div className="flex gap-2 text-xs text-gray-500">
-                            {item.appliesToPickup && (
-                              <span className="bg-blue-100 text-blue-700 px-2 py-1 rounded">Pickup</span>
-                            )}
-                            {item.appliesToDropoff && (
-                              <span className="bg-purple-100 text-purple-700 px-2 py-1 rounded">Dropoff</span>
-                            )}
-                          </div>
-                          {item.approvedBy && (
-                            <p className="text-xs text-gray-500 mt-2">
-                              Approved by {item.approvedBy} on {item.approvedAt?.toDate().toLocaleDateString()}
-                            </p>
-                          )}
-                        </div>
-                      ))
-                  )}
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {getActiveBlacklists(blacklistedPhones, 'phone').filter(p => p.status === 'approved').length === 0 ? (
-                    <p className="text-center text-gray-500 py-8">No blocked phone numbers for this event</p>
-                  ) : (
-                    getActiveBlacklists(blacklistedPhones, 'phone')
-                      .filter(p => p.status === 'approved')
-                      .map((item) => (
-                        <div key={item.id} className="bg-gray-50 border border-gray-200 rounded-xl p-4">
-                          <div className="flex items-start justify-between">
-                            <div>
-                              <div className="flex items-center gap-2 mb-2">
-                                <Phone size={18} className="text-red-600" />
-                                <p className="font-bold text-gray-900">{item.phone}</p>
-                                <span className={`text-xs font-bold px-2 py-1 rounded-full ${
-                                  item.scope === 'temporary' ? 'bg-orange-100 text-orange-800' : 'bg-red-100 text-red-800'
-                                }`}>
-                                  {item.scope === 'temporary' ? 'TEMP' : 'PERM'}
-                                </span>
-                              </div>
-                              <p className="text-sm text-gray-600 mb-2">
-                                <strong>Reason:</strong> {item.reason}
-                              </p>
-                              {item.approvedBy && (
-                                <p className="text-xs text-gray-500">
-                                  Approved by {item.approvedBy} on {item.approvedAt?.toDate().toLocaleDateString()}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        <BlacklistViewerModal
+          isOpen={showBlacklistViewer}
+          onClose={() => setShowBlacklistViewer(false)}
+          activeNDR={activeNDR}
+          blacklistedAddresses={blacklistedAddresses}
+          blacklistedPhones={blacklistedPhones}
+          getActiveBlacklists={getActiveBlacklists}
+        />
       )}
     </div>
   );
