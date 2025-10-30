@@ -1799,10 +1799,12 @@ const NotesTabEditable = ({ notes, setNotes, ndrId, assignments, members, ndr })
 
           <div class="chat-logs">
             <div class="chat-logs-title">Communication Logs</div>
-            <p style="margin-bottom: 8px; color: #374151; font-size: 12px;">View complete chat history from the event:</p>
-            <a href="${appUrl}/couch-navigator?ndrId=${ndr.id}&eventName=${encodeURIComponent(ndr.eventName)}" class="chat-link" target="_blank">📱 View Couch & Navigator Chat Logs</a>
-            <p style="margin-top: 10px; font-size: 11px; color: #6b7280; font-style: italic;">
+            <p style="margin-bottom: 8px; color: #374151; font-size: 12px; font-weight: 600;">
+              📱 Communication logs are available as a separate PDF document
+            </p>
+            <p style="margin-top: 4px; font-size: 11px; color: #6b7280; font-style: italic;">
               Note: Chat logs contain all communication between the couch (command center) and navigators (field operators) during the event.
+              Download the Communication Logs PDF from the NDR Reports page.
             </p>
           </div>
 
@@ -1815,6 +1817,279 @@ const NotesTabEditable = ({ notes, setNotes, ndrId, assignments, members, ndr })
       </html>
     `);
     printWindow.document.close();
+  };
+
+  const downloadChatLogsAsPDF = async () => {
+    // Fetch all chat messages for this NDR from Firestore
+    try {
+      const messagesQuery = query(
+        collection(db, 'couchMessages'),
+        where('ndrId', '==', ndr.id),
+        orderBy('timestamp', 'asc')
+      );
+
+      const messagesSnapshot = await getDocs(messagesQuery);
+      const messages = messagesSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        timestamp: doc.data().timestamp?.toDate()
+      }));
+
+      // Group messages by car number
+      const messagesByCar = {};
+      messages.forEach(msg => {
+        const carNum = msg.carNumber || 'Unknown';
+        if (!messagesByCar[carNum]) {
+          messagesByCar[carNum] = [];
+        }
+        messagesByCar[carNum].push(msg);
+      });
+
+      // Sort car numbers
+      const sortedCarNumbers = Object.keys(messagesByCar).sort((a, b) => {
+        if (a === 'Unknown') return 1;
+        if (b === 'Unknown') return -1;
+        return parseInt(a) - parseInt(b);
+      });
+
+      // Generate HTML for chat logs
+      const printWindow = window.open('', '_blank');
+      if (!printWindow) {
+        alert('Please allow popups to download the chat logs PDF');
+        return;
+      }
+
+      const chatLogsHTML = sortedCarNumbers.map(carNum => {
+        const carMessages = messagesByCar[carNum];
+        const messagesHTML = carMessages.map(msg => {
+          const time = msg.timestamp ? msg.timestamp.toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+            second: '2-digit'
+          }) : 'Unknown time';
+
+          const senderClass = msg.sender === 'couch' ? 'couch-message' : 'navigator-message';
+          const senderLabel = msg.sender === 'couch' ? 'Couch' : 'Navigator';
+
+          return `
+            <div class="message ${senderClass}">
+              <div class="message-header">
+                <span class="sender-name">${msg.senderName || senderLabel}</span>
+                <span class="message-time">${time}</span>
+              </div>
+              <div class="message-content">${msg.message || ''}</div>
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div class="car-section">
+            <div class="car-title">Car ${carNum}</div>
+            <div class="messages-container">
+              ${messagesHTML || '<div class="no-messages">No messages for this car</div>'}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Chat Logs - ${ndr.eventName}</title>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+              /* Reset and base styles */
+              * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+              }
+
+              body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Helvetica Neue', Arial, sans-serif;
+                line-height: 1.5;
+                color: #1a1a1a;
+                background: #ffffff;
+                padding: 20px;
+                max-width: 900px;
+                margin: 0 auto;
+                font-size: 13px;
+              }
+
+              /* Header styles */
+              .report-header {
+                text-align: center;
+                border-bottom: 2px solid #2563eb;
+                padding-bottom: 12px;
+                margin-bottom: 20px;
+              }
+
+              h1 {
+                font-size: 22px;
+                font-weight: 700;
+                color: #1e40af;
+                margin-bottom: 6px;
+                letter-spacing: -0.5px;
+              }
+
+              h2 {
+                font-size: 16px;
+                font-weight: 600;
+                color: #374151;
+                margin-bottom: 4px;
+              }
+
+              .date {
+                font-size: 13px;
+                color: #6b7280;
+                font-weight: 500;
+              }
+
+              /* Car section styles */
+              .car-section {
+                margin-bottom: 24px;
+                page-break-inside: avoid;
+              }
+
+              .car-title {
+                font-size: 16px;
+                font-weight: 700;
+                color: #1e40af;
+                background: #eff6ff;
+                padding: 10px 12px;
+                border-radius: 6px 6px 0 0;
+                border: 1.5px solid #2563eb;
+                border-bottom: none;
+              }
+
+              .messages-container {
+                border: 1.5px solid #e5e7eb;
+                border-radius: 0 0 6px 6px;
+                padding: 12px;
+                background: #f9fafb;
+              }
+
+              /* Message styles */
+              .message {
+                margin-bottom: 10px;
+                padding: 8px 10px;
+                border-radius: 6px;
+                border: 1px solid #e5e7eb;
+                background: white;
+              }
+
+              .message-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 4px;
+                padding-bottom: 4px;
+                border-bottom: 1px solid #f3f4f6;
+              }
+
+              .sender-name {
+                font-weight: 600;
+                font-size: 12px;
+                color: #374151;
+              }
+
+              .couch-message .sender-name {
+                color: #2563eb;
+              }
+
+              .navigator-message .sender-name {
+                color: #059669;
+              }
+
+              .message-time {
+                font-size: 11px;
+                color: #6b7280;
+              }
+
+              .message-content {
+                font-size: 12px;
+                color: #1a1a1a;
+                word-wrap: break-word;
+              }
+
+              .no-messages {
+                text-align: center;
+                padding: 20px;
+                color: #6b7280;
+                font-style: italic;
+              }
+
+              /* Print styles */
+              @media print {
+                @page {
+                  margin: 0.5in;
+                  size: letter;
+                }
+
+                body {
+                  padding: 0;
+                  background: white;
+                  font-size: 11px;
+                }
+
+                .car-section {
+                  page-break-inside: avoid;
+                  margin-bottom: 20px;
+                }
+
+                .message {
+                  page-break-inside: avoid;
+                }
+              }
+
+              /* Responsive adjustments */
+              @media (max-width: 768px) {
+                body {
+                  padding: 15px;
+                }
+
+                h1 {
+                  font-size: 20px;
+                }
+
+                h2 {
+                  font-size: 14px;
+                }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="report-header">
+              <h1>Communication Logs</h1>
+              <h2>${ndr.eventName}</h2>
+              <p class="date">${new Date(ndr.eventDate).toLocaleDateString('en-US', {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+              })}</p>
+              <p style="margin-top: 8px; font-size: 12px; color: #6b7280;">
+                All communication between couch (command center) and navigators (field operators)
+              </p>
+            </div>
+
+            ${sortedCarNumbers.length > 0 ? chatLogsHTML : '<div class="no-messages">No chat messages found for this event</div>'}
+
+            <script>
+              window.onload = function() {
+                setTimeout(() => window.print(), 250);
+              }
+            </script>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+    } catch (error) {
+      console.error('Error fetching chat logs:', error);
+      alert('Failed to load chat logs. Please try again.');
+    }
   };
 
   return (
@@ -1969,13 +2244,22 @@ const NotesTabEditable = ({ notes, setNotes, ndrId, assignments, members, ndr })
       <div className="border-2 border-blue-300 rounded-lg p-4 bg-blue-50">
         <div className="flex justify-between items-center mb-4">
           <h4 className="font-semibold text-blue-900">Formatted Night Report</h4>
-          <button
-            onClick={downloadReportAsPDF}
-            className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 print:hidden"
-          >
-            <Printer size={18} />
-            Download as PDF
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={downloadReportAsPDF}
+              className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 print:hidden"
+            >
+              <Printer size={18} />
+              Download Report PDF
+            </button>
+            <button
+              onClick={downloadChatLogsAsPDF}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 print:hidden"
+            >
+              <FileText size={18} />
+              Download Chat Logs PDF
+            </button>
+          </div>
         </div>
         <div className="text-sm bg-white p-4 rounded border text-gray-800 max-h-96 overflow-y-auto" id="formatted-report">
           {generateFormattedReport()}
@@ -2595,10 +2879,12 @@ const NotesTabViewOnly = ({ ndr, members }) => {
 
           <div class="chat-logs">
             <div class="chat-logs-title">Communication Logs</div>
-            <p style="margin-bottom: 8px; color: #374151; font-size: 12px;">View complete chat history from the event:</p>
-            <a href="${appUrl}/couch-navigator?ndrId=${ndr.id}&eventName=${encodeURIComponent(ndr.eventName)}" class="chat-link" target="_blank">📱 View Couch & Navigator Chat Logs</a>
-            <p style="margin-top: 10px; font-size: 11px; color: #6b7280; font-style: italic;">
+            <p style="margin-bottom: 8px; color: #374151; font-size: 12px; font-weight: 600;">
+              📱 Communication logs are available as a separate PDF document
+            </p>
+            <p style="margin-top: 4px; font-size: 11px; color: #6b7280; font-style: italic;">
               Note: Chat logs contain all communication between the couch (command center) and navigators (field operators) during the event.
+              Download the Communication Logs PDF from the NDR Reports page.
             </p>
           </div>
 
@@ -2611,6 +2897,279 @@ const NotesTabViewOnly = ({ ndr, members }) => {
       </html>
     `);
     printWindow.document.close();
+  };
+
+  const downloadChatLogsAsPDF = async () => {
+    // Fetch all chat messages for this NDR from Firestore
+    try {
+      const messagesQuery = query(
+        collection(db, 'couchMessages'),
+        where('ndrId', '==', ndr.id),
+        orderBy('timestamp', 'asc')
+      );
+
+      const messagesSnapshot = await getDocs(messagesQuery);
+      const messages = messagesSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        timestamp: doc.data().timestamp?.toDate()
+      }));
+
+      // Group messages by car number
+      const messagesByCar = {};
+      messages.forEach(msg => {
+        const carNum = msg.carNumber || 'Unknown';
+        if (!messagesByCar[carNum]) {
+          messagesByCar[carNum] = [];
+        }
+        messagesByCar[carNum].push(msg);
+      });
+
+      // Sort car numbers
+      const sortedCarNumbers = Object.keys(messagesByCar).sort((a, b) => {
+        if (a === 'Unknown') return 1;
+        if (b === 'Unknown') return -1;
+        return parseInt(a) - parseInt(b);
+      });
+
+      // Generate HTML for chat logs
+      const printWindow = window.open('', '_blank');
+      if (!printWindow) {
+        alert('Please allow popups to download the chat logs PDF');
+        return;
+      }
+
+      const chatLogsHTML = sortedCarNumbers.map(carNum => {
+        const carMessages = messagesByCar[carNum];
+        const messagesHTML = carMessages.map(msg => {
+          const time = msg.timestamp ? msg.timestamp.toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+            second: '2-digit'
+          }) : 'Unknown time';
+
+          const senderClass = msg.sender === 'couch' ? 'couch-message' : 'navigator-message';
+          const senderLabel = msg.sender === 'couch' ? 'Couch' : 'Navigator';
+
+          return `
+            <div class="message ${senderClass}">
+              <div class="message-header">
+                <span class="sender-name">${msg.senderName || senderLabel}</span>
+                <span class="message-time">${time}</span>
+              </div>
+              <div class="message-content">${msg.message || ''}</div>
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div class="car-section">
+            <div class="car-title">Car ${carNum}</div>
+            <div class="messages-container">
+              ${messagesHTML || '<div class="no-messages">No messages for this car</div>'}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Chat Logs - ${ndr.eventName}</title>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+              /* Reset and base styles */
+              * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+              }
+
+              body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Helvetica Neue', Arial, sans-serif;
+                line-height: 1.5;
+                color: #1a1a1a;
+                background: #ffffff;
+                padding: 20px;
+                max-width: 900px;
+                margin: 0 auto;
+                font-size: 13px;
+              }
+
+              /* Header styles */
+              .report-header {
+                text-align: center;
+                border-bottom: 2px solid #2563eb;
+                padding-bottom: 12px;
+                margin-bottom: 20px;
+              }
+
+              h1 {
+                font-size: 22px;
+                font-weight: 700;
+                color: #1e40af;
+                margin-bottom: 6px;
+                letter-spacing: -0.5px;
+              }
+
+              h2 {
+                font-size: 16px;
+                font-weight: 600;
+                color: #374151;
+                margin-bottom: 4px;
+              }
+
+              .date {
+                font-size: 13px;
+                color: #6b7280;
+                font-weight: 500;
+              }
+
+              /* Car section styles */
+              .car-section {
+                margin-bottom: 24px;
+                page-break-inside: avoid;
+              }
+
+              .car-title {
+                font-size: 16px;
+                font-weight: 700;
+                color: #1e40af;
+                background: #eff6ff;
+                padding: 10px 12px;
+                border-radius: 6px 6px 0 0;
+                border: 1.5px solid #2563eb;
+                border-bottom: none;
+              }
+
+              .messages-container {
+                border: 1.5px solid #e5e7eb;
+                border-radius: 0 0 6px 6px;
+                padding: 12px;
+                background: #f9fafb;
+              }
+
+              /* Message styles */
+              .message {
+                margin-bottom: 10px;
+                padding: 8px 10px;
+                border-radius: 6px;
+                border: 1px solid #e5e7eb;
+                background: white;
+              }
+
+              .message-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 4px;
+                padding-bottom: 4px;
+                border-bottom: 1px solid #f3f4f6;
+              }
+
+              .sender-name {
+                font-weight: 600;
+                font-size: 12px;
+                color: #374151;
+              }
+
+              .couch-message .sender-name {
+                color: #2563eb;
+              }
+
+              .navigator-message .sender-name {
+                color: #059669;
+              }
+
+              .message-time {
+                font-size: 11px;
+                color: #6b7280;
+              }
+
+              .message-content {
+                font-size: 12px;
+                color: #1a1a1a;
+                word-wrap: break-word;
+              }
+
+              .no-messages {
+                text-align: center;
+                padding: 20px;
+                color: #6b7280;
+                font-style: italic;
+              }
+
+              /* Print styles */
+              @media print {
+                @page {
+                  margin: 0.5in;
+                  size: letter;
+                }
+
+                body {
+                  padding: 0;
+                  background: white;
+                  font-size: 11px;
+                }
+
+                .car-section {
+                  page-break-inside: avoid;
+                  margin-bottom: 20px;
+                }
+
+                .message {
+                  page-break-inside: avoid;
+                }
+              }
+
+              /* Responsive adjustments */
+              @media (max-width: 768px) {
+                body {
+                  padding: 15px;
+                }
+
+                h1 {
+                  font-size: 20px;
+                }
+
+                h2 {
+                  font-size: 14px;
+                }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="report-header">
+              <h1>Communication Logs</h1>
+              <h2>${ndr.eventName}</h2>
+              <p class="date">${new Date(ndr.eventDate).toLocaleDateString('en-US', {
+                weekday: 'long',
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric'
+              })}</p>
+              <p style="margin-top: 8px; font-size: 12px; color: #6b7280;">
+                All communication between couch (command center) and navigators (field operators)
+              </p>
+            </div>
+
+            ${sortedCarNumbers.length > 0 ? chatLogsHTML : '<div class="no-messages">No chat messages found for this event</div>'}
+
+            <script>
+              window.onload = function() {
+                setTimeout(() => window.print(), 250);
+              }
+            </script>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+    } catch (error) {
+      console.error('Error fetching chat logs:', error);
+      alert('Failed to load chat logs. Please try again.');
+    }
   };
 
   return (
@@ -2685,13 +3244,22 @@ const NotesTabViewOnly = ({ ndr, members }) => {
       <div className="border-2 border-blue-300 rounded-lg p-4 bg-blue-50">
         <div className="flex justify-between items-center mb-4">
           <h4 className="font-semibold text-blue-900">Formatted Night Report</h4>
-          <button
-            onClick={downloadReportAsPDF}
-            className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 print:hidden"
-          >
-            <Printer size={18} />
-            Download as PDF
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={downloadReportAsPDF}
+              className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 print:hidden"
+            >
+              <Printer size={18} />
+              Download Report PDF
+            </button>
+            <button
+              onClick={downloadChatLogsAsPDF}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 print:hidden"
+            >
+              <FileText size={18} />
+              Download Chat Logs PDF
+            </button>
+          </div>
         </div>
         <div className="text-sm bg-white p-4 rounded border text-gray-800 max-h-96 overflow-y-auto" id="formatted-report-view">
           {generateFormattedReport()}
