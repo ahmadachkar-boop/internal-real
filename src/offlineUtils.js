@@ -1,19 +1,20 @@
 // Offline Queue Management and Connection Status
 import { offlineLogger } from './logger';
+import { getJSON, setJSON, removeItem, getItemSync } from './utils/storageUtils';
 
 const MESSAGE_QUEUE_KEY = 'couchNav_messageQueue';
 const LOCATION_CACHE_KEY = 'couchNav_lastLocation';
 
 // Message Queue Management
-export const queueMessage = (messageData) => {
+export const queueMessage = async (messageData) => {
   try {
-    const queue = getMessageQueue();
+    const queue = await getMessageQueue();
     queue.push({
       ...messageData,
       queuedAt: Date.now(),
       id: `queued_${Date.now()}_${Math.random()}`
     });
-    localStorage.setItem(MESSAGE_QUEUE_KEY, JSON.stringify(queue));
+    await setJSON(MESSAGE_QUEUE_KEY, queue);
     offlineLogger.log('📦 Message queued for offline sync:', messageData);
     return true;
   } catch (error) {
@@ -22,30 +23,41 @@ export const queueMessage = (messageData) => {
   }
 };
 
-export const getMessageQueue = () => {
+export const getMessageQueue = async () => {
   try {
-    const queue = localStorage.getItem(MESSAGE_QUEUE_KEY);
-    return queue ? JSON.parse(queue) : [];
+    const queue = await getJSON(MESSAGE_QUEUE_KEY);
+    return queue || [];
   } catch (error) {
     console.error('❌ Error reading message queue:', error);
     return [];
   }
 };
 
-export const clearMessageQueue = () => {
+// Synchronous version for backward compatibility (use async version when possible)
+export const getMessageQueueSync = () => {
   try {
-    localStorage.removeItem(MESSAGE_QUEUE_KEY);
+    const queueStr = getItemSync(MESSAGE_QUEUE_KEY);
+    return queueStr ? JSON.parse(queueStr) : [];
+  } catch (error) {
+    console.error('❌ Error reading message queue:', error);
+    return [];
+  }
+};
+
+export const clearMessageQueue = async () => {
+  try {
+    await removeItem(MESSAGE_QUEUE_KEY);
     offlineLogger.log('✅ Message queue cleared');
   } catch (error) {
     console.error('❌ Error clearing queue:', error);
   }
 };
 
-export const removeQueuedMessage = (messageId) => {
+export const removeQueuedMessage = async (messageId) => {
   try {
-    const queue = getMessageQueue();
+    const queue = await getMessageQueue();
     const filtered = queue.filter(msg => msg.id !== messageId);
-    localStorage.setItem(MESSAGE_QUEUE_KEY, JSON.stringify(filtered));
+    await setJSON(MESSAGE_QUEUE_KEY, filtered);
     offlineLogger.log('✅ Removed message from queue:', messageId);
   } catch (error) {
     console.error('❌ Error removing queued message:', error);
@@ -53,13 +65,13 @@ export const removeQueuedMessage = (messageId) => {
 };
 
 // Location Caching
-export const cacheLocation = (locationData) => {
+export const cacheLocation = async (locationData) => {
   try {
     const cached = {
       ...locationData,
       cachedAt: Date.now()
     };
-    localStorage.setItem(LOCATION_CACHE_KEY, JSON.stringify(cached));
+    await setJSON(LOCATION_CACHE_KEY, cached);
     offlineLogger.log('💾 Location cached:', locationData);
     return true;
   } catch (error) {
@@ -68,12 +80,10 @@ export const cacheLocation = (locationData) => {
   }
 };
 
-export const getCachedLocation = () => {
+export const getCachedLocation = async () => {
   try {
-    const cached = localStorage.getItem(LOCATION_CACHE_KEY);
-    if (!cached) return null;
-
-    const location = JSON.parse(cached);
+    const location = await getJSON(LOCATION_CACHE_KEY);
+    if (!location) return null;
 
     // Check if cache is still valid (within 5 minutes)
     const age = Date.now() - location.cachedAt;
@@ -81,7 +91,7 @@ export const getCachedLocation = () => {
 
     if (age > MAX_CACHE_AGE) {
       offlineLogger.log('⚠️ Cached location too old, discarding');
-      localStorage.removeItem(LOCATION_CACHE_KEY);
+      await removeItem(LOCATION_CACHE_KEY);
       return null;
     }
 
@@ -93,9 +103,9 @@ export const getCachedLocation = () => {
   }
 };
 
-export const clearLocationCache = () => {
+export const clearLocationCache = async () => {
   try {
-    localStorage.removeItem(LOCATION_CACHE_KEY);
+    await removeItem(LOCATION_CACHE_KEY);
     offlineLogger.log('✅ Location cache cleared');
   } catch (error) {
     console.error('❌ Error clearing location cache:', error);
@@ -207,16 +217,17 @@ export const addFirestoreConnectionListener = (callback) => {
   };
 };
 
-// Sync Status
+// Sync Status (synchronous for backward compatibility)
 export const getSyncStatus = () => {
-  const queuedMessages = getMessageQueue().length;
-  const hasCache = getCachedLocation() !== null;
+  const queuedMessages = getMessageQueueSync().length;
+  // Note: getCachedLocation is now async, so we can't check cache synchronously
+  // Components should use the async version if they need cache status
 
   return {
     online: isOnline,
     firestoreConnected,
     queuedMessages,
-    hasCachedLocation: hasCache,
+    hasCachedLocation: false, // Can't check synchronously anymore
     needsSync: queuedMessages > 0
   };
 };

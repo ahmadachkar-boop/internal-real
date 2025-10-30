@@ -21,6 +21,35 @@ export const useMapRouting = (mapRef, googleMapsLoaded, activeRides, carLocation
   const routePolylineRef = useRef(null);
   const lastRenderedRouteRef = useRef(null);
 
+  // Route cache to avoid recalculating the same routes
+  const routeCache = useRef(new Map());
+
+  // Helper functions for route caching
+  const getCachedRoute = (pickup, dropoffs) => {
+    const key = `${pickup}-${dropoffs.join('-')}`;
+    const cached = routeCache.current.get(key);
+    if (cached && Date.now() - cached.timestamp < 300000) { // 5 minute cache
+      routeLogger.log('✅ Using cached route for:', key);
+      return cached.data;
+    }
+    return null;
+  };
+
+  const setCachedRoute = (pickup, dropoffs, data) => {
+    const key = `${pickup}-${dropoffs.join('-')}`;
+    routeCache.current.set(key, {
+      data,
+      timestamp: Date.now()
+    });
+
+    // Limit cache size to 20 routes
+    if (routeCache.current.size > 20) {
+      const firstKey = routeCache.current.keys().next().value;
+      routeCache.current.delete(firstKey);
+      routeLogger.log('🗑️ Removed oldest route from cache');
+    }
+  };
+
   // Clear route from map
   const clearRoute = () => {
     if (directionsRendererRef.current) {
@@ -51,7 +80,9 @@ export const useMapRouting = (mapRef, googleMapsLoaded, activeRides, carLocation
 
     clearRoute();
 
-    const directionsService = new window.google.maps.DirectionsService();
+    // Check cache first
+    const cachedRoute = getCachedRoute(pickup, dropoffs);
+
     const directionsRenderer = new window.google.maps.DirectionsRenderer({
       map: mapRef.current,
       suppressMarkers: false,
@@ -65,70 +96,87 @@ export const useMapRouting = (mapRef, googleMapsLoaded, activeRides, carLocation
 
     directionsRendererRef.current = directionsRenderer;
 
-    const waypoints = dropoffs.slice(0, -1).map(dropoff => ({
-      location: dropoff,
-      stopover: true
-    }));
+    let result;
 
-    const request = {
-      origin: pickup,
-      destination: dropoffs[dropoffs.length - 1],
-      waypoints: waypoints,
-      travelMode: window.google.maps.TravelMode.DRIVING,
-      optimizeWaypoints: true
-    };
-
-    try {
-      const result = await directionsService.route(request);
+    if (cachedRoute) {
+      // Use cached route
+      result = cachedRoute;
       directionsRenderer.setDirections(result);
-      routeLogger.log('✅ Route rendered successfully');
+      routeLogger.log('✅ Route rendered from cache');
+    } else {
+      // Calculate new route
+      const directionsService = new window.google.maps.DirectionsService();
 
-      let totalDuration = 0;
-      let totalDistance = 0;
-      result.routes[0].legs.forEach(leg => {
-        totalDuration += leg.duration.value;
-        totalDistance += leg.distance.value;
-      });
+      const waypoints = dropoffs.slice(0, -1).map(dropoff => ({
+        location: dropoff,
+        stopover: true
+      }));
 
-      const etaDate = new Date(Date.now() + totalDuration * 1000);
+      const request = {
+        origin: pickup,
+        destination: dropoffs[dropoffs.length - 1],
+        waypoints: waypoints,
+        travelMode: window.google.maps.TravelMode.DRIVING,
+        optimizeWaypoints: true
+      };
 
-      setRouteInfo({
-        duration: totalDuration,
-        durationText: Math.round(totalDuration / 60) + ' min',
-        distance: totalDistance,
-        distanceText: (totalDistance / 1609.34).toFixed(1) + ' mi',
-        eta: etaDate
-      });
+      try {
+        result = await directionsService.route(request);
+        directionsRenderer.setDirections(result);
 
-      routeLogger.log('📍 Route info:', {
-        duration: totalDuration,
-        distance: totalDistance,
-        eta: etaDate
-      });
-
-      // Only fit bounds on initial route load
-      if (shouldFitBounds) {
-        routeLogger.log('🎯 Fitting bounds to route');
-        const bounds = new window.google.maps.LatLngBounds();
-        result.routes[0].legs.forEach(leg => {
-          bounds.extend(leg.start_location);
-          bounds.extend(leg.end_location);
-        });
-
-        // Include car location in bounds if available
-        if (selectedCar && carLocations[selectedCar]) {
-          const carLoc = carLocations[selectedCar];
-          if (carLoc.latitude && carLoc.longitude) {
-            bounds.extend({ lat: carLoc.latitude, lng: carLoc.longitude });
-            routeLogger.log('📍 Including car location in bounds');
-          }
-        }
-
-        mapRef.current.fitBounds(bounds);
+        // Cache the result
+        setCachedRoute(pickup, dropoffs, result);
+        routeLogger.log('✅ Route rendered and cached');
+      } catch (error) {
+        routeLogger.warn('⚠️ Route rendering failed (API may need a few minutes to activate):', error.message);
+        setRouteInfo(null);
+        return;
       }
-    } catch (error) {
-      routeLogger.warn('⚠️ Route rendering failed (API may need a few minutes to activate):', error.message);
-      setRouteInfo(null);
+    }
+
+    // Calculate route info
+    let totalDuration = 0;
+    let totalDistance = 0;
+    result.routes[0].legs.forEach(leg => {
+      totalDuration += leg.duration.value;
+      totalDistance += leg.distance.value;
+    });
+
+    const etaDate = new Date(Date.now() + totalDuration * 1000);
+
+    setRouteInfo({
+      duration: totalDuration,
+      durationText: Math.round(totalDuration / 60) + ' min',
+      distance: totalDistance,
+      distanceText: (totalDistance / 1609.34).toFixed(1) + ' mi',
+      eta: etaDate
+    });
+
+    routeLogger.log('📍 Route info:', {
+      duration: totalDuration,
+      distance: totalDistance,
+      eta: etaDate
+    });
+
+    // Only fit bounds on initial route load
+    if (shouldFitBounds) {
+      routeLogger.log('🎯 Fitting bounds to route');
+      const bounds = new window.google.maps.LatLngBounds();
+      result.routes[0].legs.forEach(leg => {
+        bounds.extend(leg.start_location);
+        bounds.extend(leg.end_location);
+      });
+
+      // Include car location in bounds if available
+      if (selectedCar && carLocations[selectedCar]) {
+        const carLoc = carLocations[selectedCar];
+        if (carLoc.latitude && carLoc.longitude) {
+          bounds.extend({ lat: carLoc.latitude, lng: carLoc.longitude });
+          routeLogger.log('📍 Including car location in bounds');
+        }
+      }
+
+      mapRef.current.fitBounds(bounds);
     }
   };
 

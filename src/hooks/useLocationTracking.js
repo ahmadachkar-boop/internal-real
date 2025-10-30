@@ -13,6 +13,7 @@ import {
 import { cacheLocation, getCachedLocation } from '../offlineUtils';
 import { hapticLocationEnabled } from '../hapticUtils';
 import { locationLogger } from '../logger';
+import { getItem, setItem } from '../utils/storageUtils';
 
 // Debouncer helper for batching location updates
 const createDebouncer = (delay) => {
@@ -236,7 +237,7 @@ export const useLocationTracking = (viewMode, selectedCar, activeNDR, platformIn
           await updateLocationToFirestore(positionResult);
 
           setLocationEnabled(true);
-          localStorage.setItem('locationEnabled', 'true');
+          await setItem('locationEnabled', 'true');
           setDebugStatus('✅ Native location enabled!');
           setLocationError('');
           hapticLocationEnabled();
@@ -285,7 +286,7 @@ export const useLocationTracking = (viewMode, selectedCar, activeNDR, platformIn
       await updateLocationToFirestore(position);
 
       setLocationEnabled(true);
-      localStorage.setItem('locationEnabled', 'true');
+      await setItem('locationEnabled', 'true');
       setDebugStatus('✅ Location enabled!');
       setLocationError('');
       hapticLocationEnabled();
@@ -352,7 +353,7 @@ export const useLocationTracking = (viewMode, selectedCar, activeNDR, platformIn
       // Update local state
       setLocationEnabled(false);
       setLastLocationUpdate(null);
-      localStorage.setItem('locationEnabled', 'false');
+      await setItem('locationEnabled', 'false');
       setDebugStatus('📍 Location sharing stopped');
       setTimeout(() => setDebugStatus(''), 2000);
     } catch (error) {
@@ -361,7 +362,7 @@ export const useLocationTracking = (viewMode, selectedCar, activeNDR, platformIn
       // Even if message fails, still disable location tracking locally
       setLocationEnabled(false);
       setLastLocationUpdate(null);
-      localStorage.setItem('locationEnabled', 'false');
+      await setItem('locationEnabled', 'false');
 
       setDebugStatus('❌ Error stopping location - check connection');
       setTimeout(() => setDebugStatus(''), 3000);
@@ -402,13 +403,16 @@ export const useLocationTracking = (viewMode, selectedCar, activeNDR, platformIn
     }
   };
 
-  // Restore location state from localStorage
+  // Restore location state from storage
   useEffect(() => {
-    const savedLocationEnabled = localStorage.getItem('locationEnabled') === 'true';
-    if (savedLocationEnabled && selectedCar) {
-      setLocationEnabled(true);
-      locationLogger.log('Restored location enabled state - will auto-resume tracking');
-    }
+    const restoreLocationState = async () => {
+      const savedLocationEnabled = (await getItem('locationEnabled')) === 'true';
+      if (savedLocationEnabled && selectedCar) {
+        setLocationEnabled(true);
+        locationLogger.log('Restored location enabled state - will auto-resume tracking');
+      }
+    };
+    restoreLocationState();
   }, [selectedCar]);
 
   // Auto-resume location tracking if it was previously enabled

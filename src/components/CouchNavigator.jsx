@@ -10,6 +10,7 @@ import { isNativeApp } from '../capacitorUtils';
 import QueueManager from './QueueManager';
 import { Capacitor } from '@capacitor/core';
 import { navigationLogger, markersLogger } from '../logger';
+import { getItem, setItem, removeItem } from '../utils/storageUtils';
 
 // Custom Hooks
 import { useNavigatorAssignment } from '../hooks/useNavigatorAssignment';
@@ -238,35 +239,39 @@ const CouchNavigator = () => {
 
   // Platform detection
   useEffect(() => {
-    const userAgent = navigator.userAgent || navigator.vendor || window.opera;
-    const isIOS = /iPad|iPhone|iPod/.test(userAgent);
-    const isAndroid = /android/i.test(userAgent);
-    const isMobile = isIOS || isAndroid;
-    const isPWA = window.matchMedia('(display-mode: standalone)').matches ||
-                  window.navigator.standalone === true;
+    const initializePlatform = async () => {
+      const userAgent = navigator.userAgent || navigator.vendor || window.opera;
+      const isIOS = /iPad|iPhone|iPod/.test(userAgent);
+      const isAndroid = /android/i.test(userAgent);
+      const isMobile = isIOS || isAndroid;
+      const isPWA = window.matchMedia('(display-mode: standalone)').matches ||
+                    window.navigator.standalone === true;
 
-    setPlatformInfo({ isIOS, isAndroid, isMobile, isPWA });
+      setPlatformInfo({ isIOS, isAndroid, isMobile, isPWA });
 
-    // Restore state from localStorage
-    const savedCar = localStorage.getItem('selectedCar');
-    const savedViewMode = localStorage.getItem('viewMode');
+      // Restore state from storage
+      const savedCar = await getItem('selectedCar');
+      const savedViewMode = await getItem('viewMode');
 
-    if (savedCar) {
-      setSelectedCar(savedCar);
-      setCarNumber(savedCar);
-      navigationLogger.log('Restored car selection:', savedCar);
-    }
+      if (savedCar) {
+        setSelectedCar(savedCar);
+        setCarNumber(savedCar);
+        navigationLogger.log('Restored car selection:', savedCar);
+      }
 
-    if (savedViewMode) {
-      setViewMode(savedViewMode);
-      navigationLogger.log('Restored view mode:', savedViewMode);
-    }
+      if (savedViewMode) {
+        setViewMode(savedViewMode);
+        navigationLogger.log('Restored view mode:', savedViewMode);
+      }
 
-    console.log('🔔 Platform check:', {
-      isNativeApp,
-      capacitorPlatform: Capacitor.getPlatform(),
-      capacitorNative: Capacitor.isNativePlatform()
-    });
+      console.log('🔔 Platform check:', {
+        isNativeApp,
+        capacitorPlatform: Capacitor.getPlatform(),
+        capacitorNative: Capacitor.isNativePlatform()
+      });
+    };
+
+    initializePlatform();
   }, []);
 
   // Load historical NDR
@@ -335,30 +340,40 @@ const CouchNavigator = () => {
 
   // Auto-apply user assignment
   useEffect(() => {
-    if (!userAssignment || isHistoricalView) return;
+    const applyUserAssignment = async () => {
+      if (!userAssignment || isHistoricalView) return;
 
-    if (userAssignment.type === 'car') {
-      setViewMode('navigator');
-      setSelectedCar(String(userAssignment.carNumber));
-      setCarNumber(String(userAssignment.carNumber));
-      localStorage.setItem('selectedCar', String(userAssignment.carNumber));
-      localStorage.setItem('viewMode', 'navigator');
-    } else if (userAssignment.type === 'couch') {
-      // Couch users can manually select view mode
-    }
+      if (userAssignment.type === 'car') {
+        setViewMode('navigator');
+        setSelectedCar(String(userAssignment.carNumber));
+        setCarNumber(String(userAssignment.carNumber));
+        await setItem('selectedCar', String(userAssignment.carNumber));
+        await setItem('viewMode', 'navigator');
+      } else if (userAssignment.type === 'couch') {
+        // Couch users can manually select view mode
+      }
+    };
+
+    applyUserAssignment();
   }, [userAssignment, isHistoricalView]);
 
-  // Save state to localStorage
+  // Save state to storage
   useEffect(() => {
-    if (selectedCar) {
-      localStorage.setItem('selectedCar', selectedCar);
-    } else {
-      localStorage.removeItem('selectedCar');
-    }
+    const saveSelectedCar = async () => {
+      if (selectedCar) {
+        await setItem('selectedCar', selectedCar);
+      } else {
+        await removeItem('selectedCar');
+      }
+    };
+    saveSelectedCar();
   }, [selectedCar]);
 
   useEffect(() => {
-    localStorage.setItem('viewMode', viewMode);
+    const saveViewMode = async () => {
+      await setItem('viewMode', viewMode);
+    };
+    saveViewMode();
   }, [viewMode]);
 
   // Auto-scroll messages
@@ -574,9 +589,9 @@ const CouchNavigator = () => {
     mapRef.current.setZoom(16);
   }, [carLocations]);
 
-  const handleViewModeChange = useCallback((mode) => {
+  const handleViewModeChange = useCallback(async (mode) => {
     setViewMode(mode);
-    localStorage.setItem('viewMode', mode);
+    await setItem('viewMode', mode);
   }, []);
 
   const handleCarSelect = useCallback((car) => {
@@ -593,7 +608,7 @@ const CouchNavigator = () => {
     Object.values(markersRef.current).forEach(marker => marker?.setMap(null));
     markersRef.current = {};
     initialMapCenterRef.current = null;
-    localStorage.removeItem('selectedCar');
+    await removeItem('selectedCar');
     setCarNumber('');
     setSelectedCar(null);
     setLocationEnabled(false);
