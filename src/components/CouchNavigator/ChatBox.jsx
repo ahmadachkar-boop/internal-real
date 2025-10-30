@@ -1,5 +1,5 @@
 import React, { memo } from 'react';
-import { MessageSquare, Send } from 'lucide-react';
+import { MessageSquare, Send, UserCheck, MapPin } from 'lucide-react';
 import { getMessageStatusDisplay } from '../../messageStatusUtils';
 
 // Memoized individual message bubble component
@@ -92,8 +92,17 @@ const ChatBox = ({
   onMessageBlur,
   onSendMessage,
   sendingMessage,
-  isHistoricalView
+  isHistoricalView,
+  activeRides,
+  onPatronPickedUp,
+  onPatronDroppedOff,
+  updatingRideStatus
 }) => {
+  // Get the active ride for the selected car (only for navigator view)
+  const activeRide = viewMode === 'navigator' && activeRides && activeRides.length > 0
+    ? activeRides[0]
+    : null;
+
   return (
     <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-4 sm:p-6">
       <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
@@ -106,6 +115,31 @@ const ChatBox = ({
         messagesEndRef={messagesEndRef}
         viewMode={viewMode}
       />
+
+      {/* Status Action Buttons - Only shown for navigators with active rides */}
+      {viewMode === 'navigator' && activeRide && !isHistoricalView && (
+        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-xl">
+          <p className="text-xs font-semibold text-blue-800 mb-2">Quick Actions</p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => onPatronPickedUp(activeRide)}
+              disabled={updatingRideStatus || activeRide.pickedUpAt}
+              className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-sm"
+            >
+              <UserCheck size={16} />
+              {activeRide.pickedUpAt ? 'Picked Up ✓' : 'Patron Picked Up'}
+            </button>
+            <button
+              onClick={() => onPatronDroppedOff(activeRide)}
+              disabled={updatingRideStatus || !activeRide.pickedUpAt}
+              className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-sm"
+            >
+              <MapPin size={16} />
+              Patron Dropped Off
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Typing indicator */}
       {isOtherTyping && (

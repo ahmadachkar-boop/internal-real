@@ -22,6 +22,7 @@ import { useMapRouting } from '../hooks/useMapRouting';
 import { useNotifications } from '../hooks/useNotifications';
 import { useOfflineSync } from '../hooks/useOfflineSync';
 import { useHistoryTracking } from '../hooks/useHistoryTracking';
+import { useRideActions } from '../hooks/useRideActions';
 
 // UI Components
 import ViewModeSwitcher from './CouchNavigator/ViewModeSwitcher';
@@ -92,9 +93,17 @@ const ActiveRideDisplay = memo(({ rides }) => {
       {rides.map(ride => (
         <div key={ride.id} className="border-2 border-green-200 bg-green-50 rounded-xl p-4">
           <div className="flex items-start justify-between">
-            <div>
+            <div className="flex-1">
               <p className="font-bold text-gray-900">{ride.name}</p>
-              <p className="text-sm text-gray-600">{ride.phone}</p>
+              <a
+                href={`tel:${ride.phone}`}
+                className="text-sm text-blue-600 hover:text-blue-800 font-medium underline flex items-center gap-1 w-fit"
+              >
+                📞 {ride.phone}
+              </a>
+              <p className="text-xs text-gray-500 mt-1">
+                {ride.riders} {ride.riders === 1 ? 'patron' : 'patrons'}
+              </p>
               <div className="mt-2 space-y-1 text-sm">
                 <p className="flex items-center gap-1">
                   <span className="text-green-600">📍</span>
@@ -108,7 +117,7 @@ const ActiveRideDisplay = memo(({ rides }) => {
                 ))}
               </div>
             </div>
-            <span className="px-3 py-1 rounded-full text-xs font-bold bg-green-100 text-green-700">
+            <span className="px-3 py-1 rounded-full text-xs font-bold bg-green-100 text-green-700 h-fit">
               {ride.status}
             </span>
           </div>
@@ -148,12 +157,14 @@ const CouchNavigator = () => {
   });
   const [googleMapsMarkerReady, setGoogleMapsMarkerReady] = useState(false);
   const [forceRefresh, setForceRefresh] = useState(0);
+  const [updatingRideStatus, setUpdatingRideStatus] = useState(false);
 
   // Refs
   const messagesEndRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef({});
   const initialMapCenterRef = useRef(null);
+  const prevRidesRef = useRef([]);
 
   // Use historical NDR if in historical view mode, otherwise use active NDR
   const effectiveNDR = isHistoricalView ? historicalNDR : activeNDR;
@@ -206,6 +217,8 @@ const CouchNavigator = () => {
   } = useOfflineSync(activeNDR, selectedCar, locationEnabled);
 
   useHistoryTracking(mapRef, googleMapsLoaded, activeRides, carLocations);
+
+  const { startRide, completeRide } = useRideActions(activeNDR, availableCars.length);
 
   // ===== MEMOIZED DERIVED STATE =====
 
@@ -572,6 +585,64 @@ const CouchNavigator = () => {
     }
   }, [selectedCar, viewMode]);
 
+  // Send notification message when a new ride is assigned (navigator view only)
+  useEffect(() => {
+    // Only run for navigators, not for couch or historical view
+    if (viewMode !== 'navigator' || isHistoricalView || !selectedCar || !effectiveNDR) {
+      prevRidesRef.current = [];
+      return;
+    }
+
+    if (activeRides.length > 0 && prevRidesRef.current.length > 0) {
+      // Check if there's a new ride that wasn't in the previous list
+      const newRides = activeRides.filter(ride =>
+        !prevRidesRef.current.some(prevRide => prevRide.id === ride.id)
+      );
+
+      // Send a message for each new ride
+      if (newRides.length > 0) {
+        newRides.forEach(async (ride) => {
+          try {
+            const dropoffsText = ride.dropoffs?.map((dropoff, idx) =>
+              `${idx + 1}. ${dropoff}`
+            ).join('\n') || 'N/A';
+
+            const rideMessage = `🚗 New ride assigned!
+
+Name: ${ride.name}
+Phone: ${ride.phone}
+Number of patrons: ${ride.riders}
+Pickup: ${ride.pickup}
+Dropoffs:
+${dropoffsText}`;
+
+            // Create message via Firestore
+            const { addDoc, collection, Timestamp } = await import('firebase/firestore');
+            const { db } = await import('../firebase');
+
+            await addDoc(collection(db, 'couchMessages'), {
+              ndrId: effectiveNDR.id,
+              carNumber: parseInt(selectedCar, 10),
+              sender: 'couch',
+              senderName: 'System',
+              message: rideMessage,
+              timestamp: Timestamp.now(),
+              status: 'sent'
+            });
+
+            console.log('✅ New ride assignment message sent for ride:', ride.id);
+          } catch (error) {
+            console.error('Error sending new ride message:', error);
+          }
+        });
+      }
+    }
+
+    // Update the previous rides reference
+    prevRidesRef.current = activeRides;
+
+  }, [activeRides, viewMode, selectedCar, effectiveNDR, isHistoricalView]);
+
   // ===== HANDLERS =====
 
   const onMapLoad = useCallback((map) => {
@@ -624,6 +695,59 @@ const CouchNavigator = () => {
   const handleMessageBlur = useCallback(() => {
     handleTyping(false);
   }, [handleTyping]);
+
+  const handlePatronPickedUp = useCallback(async (ride) => {
+    if (!ride || updatingRideStatus) return;
+
+    setUpdatingRideStatus(true);
+    try {
+      // Update ride status
+      await startRide(ride.id);
+
+      // Send message to chat
+      const statusMessage = `✅ Patron picked up: ${ride.name}`;
+
+      // Use the sendMessage function but with custom message
+      const tempMessage = newMessage;
+      setNewMessage(statusMessage);
+      await sendMessage();
+      setNewMessage(tempMessage);
+
+      console.log('✅ Patron picked up status updated and message sent');
+    } catch (error) {
+      console.error('Error updating patron picked up status:', error);
+      setMessagingDebugStatus('❌ Failed to update status');
+      setTimeout(() => setMessagingDebugStatus(''), 3000);
+    } finally {
+      setUpdatingRideStatus(false);
+    }
+  }, [updatingRideStatus, startRide, sendMessage, newMessage, setNewMessage, setMessagingDebugStatus]);
+
+  const handlePatronDroppedOff = useCallback(async (ride) => {
+    if (!ride || updatingRideStatus) return;
+
+    setUpdatingRideStatus(true);
+    try {
+      // Send message to chat first
+      const statusMessage = `✅ Patron dropped off: ${ride.name}`;
+
+      const tempMessage = newMessage;
+      setNewMessage(statusMessage);
+      await sendMessage();
+      setNewMessage(tempMessage);
+
+      // Update ride status to completed
+      await completeRide(ride.id);
+
+      console.log('✅ Patron dropped off status updated and message sent');
+    } catch (error) {
+      console.error('Error updating patron dropped off status:', error);
+      setMessagingDebugStatus('❌ Failed to update status');
+      setTimeout(() => setMessagingDebugStatus(''), 3000);
+    } finally {
+      setUpdatingRideStatus(false);
+    }
+  }, [updatingRideStatus, completeRide, sendMessage, newMessage, setNewMessage, setMessagingDebugStatus]);
 
   // ===== LOADING AND ERROR STATES =====
 
@@ -874,6 +998,10 @@ const CouchNavigator = () => {
                   onSendMessage={sendMessage}
                   sendingMessage={sendingMessage}
                   isHistoricalView={isHistoricalView}
+                  activeRides={activeRides}
+                  onPatronPickedUp={handlePatronPickedUp}
+                  onPatronDroppedOff={handlePatronDroppedOff}
+                  updatingRideStatus={updatingRideStatus}
                 />
               </>
             )}
@@ -939,6 +1067,10 @@ const CouchNavigator = () => {
                   onSendMessage={sendMessage}
                   sendingMessage={sendingMessage}
                   isHistoricalView={isHistoricalView}
+                  activeRides={activeRides}
+                  onPatronPickedUp={handlePatronPickedUp}
+                  onPatronDroppedOff={handlePatronDroppedOff}
+                  updatingRideStatus={updatingRideStatus}
                 />
               </>
             )}
