@@ -74,7 +74,8 @@ export const useRideTracking = (effectiveNDR, selectedCar, viewMode) => {
             dropoffs: doc.data().dropoffs || [doc.data().dropoff],
             riders: doc.data().riders,
             status: doc.data().status,
-            carNumber: doc.data().carNumber
+            carNumber: doc.data().carNumber,
+            pickedUpAt: doc.data().pickedUpAt
           }));
           setActiveRides(rides);
         }

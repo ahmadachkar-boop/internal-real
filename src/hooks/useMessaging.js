@@ -177,14 +177,16 @@ export const useMessaging = (effectiveNDR, selectedCar, viewMode, userProfile, i
   }, [effectiveNDR, selectedCar, viewMode]);
 
   // Send message function
-  const sendMessage = async () => {
+  const sendMessage = async (customMessage = null) => {
     // Prevent sending messages in historical view mode
     if (isHistoricalView) {
       console.log('Message send blocked - historical view mode');
       return;
     }
 
-    if (!newMessage.trim() || !selectedCar || !effectiveNDR) {
+    const messageToSend = customMessage || newMessage;
+
+    if (!messageToSend.trim() || !selectedCar || !effectiveNDR) {
       console.log('Message send blocked');
       return;
     }
@@ -199,7 +201,7 @@ export const useMessaging = (effectiveNDR, selectedCar, viewMode, userProfile, i
       carNumber: carNum,
       sender: viewMode,
       senderName: userProfile?.name || (viewMode === 'couch' ? 'Couch' : 'Navigator'),
-      message: newMessage.trim(),
+      message: messageToSend.trim(),
       timestamp: Timestamp.now()
     };
 
@@ -211,7 +213,10 @@ export const useMessaging = (effectiveNDR, selectedCar, viewMode, userProfile, i
       queueMessage(messageData);
       setQueuedMessagesCount(getMessageQueue().length);
       setDebugStatus('📦 Queued (offline)');
-      setNewMessage('');
+      // Only clear newMessage if we're not sending a custom message
+      if (!customMessage) {
+        setNewMessage('');
+      }
       hapticSuccess();
       setTimeout(() => setDebugStatus(''), 2000);
       setSendingMessage(false);
@@ -225,7 +230,10 @@ export const useMessaging = (effectiveNDR, selectedCar, viewMode, userProfile, i
       setFirestoreConnected(true);
 
       setDebugStatus('✅ Sent!');
-      setNewMessage('');
+      // Only clear newMessage if we're not sending a custom message
+      if (!customMessage) {
+        setNewMessage('');
+      }
       hapticMessageSent();
 
       // Clear typing indicator
@@ -251,7 +259,10 @@ export const useMessaging = (effectiveNDR, selectedCar, viewMode, userProfile, i
         queueMessage(messageData);
         setQueuedMessagesCount(getMessageQueue().length);
         errorMsg = '📦 Queued (network unavailable)';
-        setNewMessage('');
+        // Only clear newMessage if we're not sending a custom message
+        if (!customMessage) {
+          setNewMessage('');
+        }
         hapticSuccess();
       } else {
         errorMsg += error.message;

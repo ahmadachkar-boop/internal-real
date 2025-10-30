@@ -704,14 +704,9 @@ ${dropoffsText}`;
       // Update ride status
       await startRide(ride.id);
 
-      // Send message to chat
+      // Send message to chat with custom message
       const statusMessage = `✅ Patron picked up: ${ride.name}`;
-
-      // Use the sendMessage function but with custom message
-      const tempMessage = newMessage;
-      setNewMessage(statusMessage);
-      await sendMessage();
-      setNewMessage(tempMessage);
+      await sendMessage(statusMessage);
 
       console.log('✅ Patron picked up status updated and message sent');
     } catch (error) {
@@ -721,20 +716,16 @@ ${dropoffsText}`;
     } finally {
       setUpdatingRideStatus(false);
     }
-  }, [updatingRideStatus, startRide, sendMessage, newMessage, setNewMessage, setMessagingDebugStatus]);
+  }, [updatingRideStatus, startRide, sendMessage, setMessagingDebugStatus]);
 
   const handlePatronDroppedOff = useCallback(async (ride) => {
     if (!ride || updatingRideStatus) return;
 
     setUpdatingRideStatus(true);
     try {
-      // Send message to chat first
+      // Send message to chat with custom message
       const statusMessage = `✅ Patron dropped off: ${ride.name}`;
-
-      const tempMessage = newMessage;
-      setNewMessage(statusMessage);
-      await sendMessage();
-      setNewMessage(tempMessage);
+      await sendMessage(statusMessage);
 
       // Update ride status to completed
       await completeRide(ride.id);
@@ -747,7 +738,7 @@ ${dropoffsText}`;
     } finally {
       setUpdatingRideStatus(false);
     }
-  }, [updatingRideStatus, completeRide, sendMessage, newMessage, setNewMessage, setMessagingDebugStatus]);
+  }, [updatingRideStatus, completeRide, sendMessage, setMessagingDebugStatus]);
 
   // ===== LOADING AND ERROR STATES =====
 
